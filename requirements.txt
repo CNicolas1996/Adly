@@ -1,0 +1,25 @@
+# Datos
+pandas==2.1.4
+gspread==6.0.0
+google-auth==2.27.0
+
+# Backend
+fastapi==0.109.0
+uvicorn==0.27.0
+
+# Scheduler
+APScheduler==3.10.4
+
+# IA
+anthropic==0.18.1
+python-dotenv==1.0.0
+
+# Visualización
+plotly==5.18.0
+
+# Seguridad
+slowapi==0.1.9
+passlib==1.7.4
+
+# Dev
+pytest==7.4.4
