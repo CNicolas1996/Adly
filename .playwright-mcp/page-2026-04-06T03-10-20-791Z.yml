@@ -1,0 +1,52 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - link "⚡ ClaudeCourses" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e5]: ⚡
+      - generic [ref=e6]: ClaudeCourses
+    - generic [ref=e7]:
+      - link "Dashboard" [ref=e8] [cursor=pointer]:
+        - /url: /
+      - link "Cursos" [ref=e9] [cursor=pointer]:
+        - /url: /courses
+      - link "Notas" [ref=e10] [cursor=pointer]:
+        - /url: /notes
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - link "🤖 CC" [ref=e13] [cursor=pointer]:
+        - /url: /courses/claude-code
+      - generic [ref=e14]: /
+      - generic [ref=e15]: Custom Commands
+      - generic [ref=e16]:
+        - generic [ref=e17]: 8 min
+        - button "↓ PDF" [ref=e18]
+    - generic [ref=e19]:
+      - heading "Custom Commands" [level=1] [ref=e20]
+      - generic [ref=e21]:
+        - generic [ref=e22]: CONCEPTO CLAVE
+        - generic [ref=e23]: Commands = Automatización de tu workflow
+        - generic [ref=e24]: Un custom command bien escrito captura tu proceso de trabajo habitual. En lugar de escribir el mismo prompt largo cada vez, lo defines una vez y lo usas siempre con /mi-comando.
+      - generic [ref=e25]:
+        - button "Contenido" [ref=e26]
+        - button "Transcript" [ref=e27]
+        - button "Quiz" [ref=e28]
+        - button "Notas" [ref=e29]
+      - generic [ref=e31]:
+        - heading "Custom Commands en Claude Code" [level=2] [ref=e32]
+        - paragraph [ref=e33]:
+          - text: Los
+          - strong [ref=e34]: Custom Commands
+          - text: son atajos reutilizables que pueden invocar prompts complejos con un solo comando.
+        - heading "Ubicación" [level=3] [ref=e35]
+        - code [ref=e37]: ".claude/commands/ # Comandos del proyecto ~/.claude/commands/ # Comandos globales"
+        - heading "Crear un Custom Command" [level=3] [ref=e38]
+        - code [ref=e40]: "# .claude/commands/review-pr.md Revisa el diff del PR actual: 1. Ejecuta `git diff main...HEAD` 2. Analiza los cambios por categoría (feat, fix, refactor) 3. Identifica posibles bugs o edge cases 4. Sugiere mejoras de código 5. Genera un resumen para el PR description"
+        - heading "Usar el Comando" [level=3] [ref=e41]
+        - code [ref=e43]: "claude /review-pr # O durante una sesión: # /review-pr"
+        - heading "Commands con Argumentos" [level=3] [ref=e44]
+        - code [ref=e46]: "# .claude/commands/add-test.md Agrega tests para el archivo $ARGUMENTS: 1. Lee el archivo especificado 2. Identifica todas las funciones públicas 3. Crea tests unitarios con el framework del proyecto 4. Cubre happy path y edge cases 5. Asegura 100% de cobertura del archivo"
+        - code [ref=e48]: claude /add-test src/utils/parser.ts
+      - generic [ref=e49]:
+        - link "← Hooks en Claude Code" [ref=e51] [cursor=pointer]:
+          - /url: /courses/claude-code/cc-03
+        - button "Completar →" [ref=e53]

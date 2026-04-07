@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adly — Tu analista de pauta</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --ink:#0f1117;--ink2:#2d3142;--muted:#6b7280;--border:#e5e7eb;
+  --bg:#fafaf8;--white:#ffffff;--green:#00875a;--green-light:#e6f4ef;
+  --amber:#b45309;--amber-light:#fef3c7;--red:#dc2626;--red-light:#fee2e2;
+  --accent:#1a56db;--accent-light:#eff6ff;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font-family:'DM Sans',sans-serif;font-weight:300;line-height:1.7;-webkit-font-smoothing:antialiased}
+
+.hero{min-height:100vh;display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
+.hero-left{padding:80px 64px;display:flex;flex-direction:column;justify-content:center;background:var(--white);border-right:1px solid var(--border)}
+.hero-right{background:var(--ink);display:flex;flex-direction:column;justify-content:center;padding:80px 64px;position:relative;overflow:hidden}
+.hero-right::before{content:'';position:absolute;top:-200px;right:-200px;width:500px;height:500px;border-radius:50%;background:rgba(26,86,219,0.08);pointer-events:none}
+.eyebrow{font-size:11px;font-weight:500;letter-spacing:0.2em;text-transform:uppercase;color:var(--accent);margin-bottom:20px}
+.hero-title{font-family:'Playfair Display',serif;font-size:clamp(52px,6vw,80px);font-weight:900;line-height:1;letter-spacing:-0.02em;color:var(--ink);margin-bottom:24px}
+.hero-title span{color:var(--accent)}
+.hero-sub{font-size:18px;color:var(--muted);max-width:420px;line-height:1.6;margin-bottom:40px}
+.tag-row{display:flex;gap:10px;flex-wrap:wrap}
+.tag{display:inline-block;font-size:12px;font-weight:500;padding:6px 14px;border-radius:100px;border:1px solid var(--border);color:var(--ink2);background:var(--white)}
+.flow-diagram{display:flex;flex-direction:column;gap:0}
+.flow-node{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:16px 20px;display:flex;align-items:center;gap:14px}
+.flow-node.active{background:rgba(26,86,219,0.15);border-color:rgba(26,86,219,0.4)}
+.flow-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:16px}
+.flow-icon.blue{background:rgba(26,86,219,0.2)}.flow-icon.green{background:rgba(0,135,90,0.2)}.flow-icon.amber{background:rgba(180,83,9,0.2)}
+.flow-label{font-size:13px;font-weight:500;color:rgba(255,255,255,0.9)}
+.flow-desc{font-size:11px;color:rgba(255,255,255,0.4);margin-top:1px}
+.flow-arrow{text-align:center;padding:6px 0;color:rgba(255,255,255,0.2);font-size:18px}
+
+.section{padding:100px 80px;max-width:1200px;margin:0 auto}
+.section-label{font-size:10px;font-weight:500;letter-spacing:0.2em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+.section-title{font-family:'Playfair Display',serif;font-size:clamp(32px,4vw,48px);font-weight:700;line-height:1.1;letter-spacing:-0.02em;color:var(--ink);margin-bottom:16px}
+.section-desc{font-size:16px;color:var(--muted);max-width:580px;line-height:1.7;margin-bottom:56px}
+.divider{height:1px;background:var(--border);margin:0}
+
+.problem-section{background:var(--white);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.problem-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.problem-card{padding:28px;border:1px solid var(--border);border-radius:12px;background:var(--bg)}
+.problem-card .num{font-family:'Playfair Display',serif;font-size:48px;font-weight:900;color:var(--border);line-height:1;margin-bottom:12px}
+.problem-card h3{font-size:15px;font-weight:500;color:var(--ink);margin-bottom:8px}
+.problem-card p{font-size:13px;color:var(--muted);line-height:1.6}
+
+.steps{display:grid;grid-template-columns:repeat(2,1fr);gap:2px;background:var(--border);border-radius:12px;overflow:hidden}
+.step{background:var(--white);padding:32px;position:relative}
+.step-num{font-family:'Playfair Display',serif;font-size:64px;font-weight:900;color:var(--border);line-height:1;margin-bottom:12px}
+.step h3{font-size:16px;font-weight:500;color:var(--ink);margin-bottom:8px}
+.step p{font-size:13px;color:var(--muted);line-height:1.6}
+.step .note{display:inline-block;font-size:11px;font-weight:500;padding:4px 10px;border-radius:100px;margin-top:12px}
+.note-blue{background:var(--accent-light);color:var(--accent)}
+.note-green{background:var(--green-light);color:var(--green)}
+.note-amber{background:var(--amber-light);color:var(--amber)}
+
+.integrity-section{background:var(--ink)}
+.integrity-section .section-label{color:rgba(26,86,219,0.8)}
+.integrity-section .section-title{color:var(--white)}
+.integrity-section .section-desc{color:rgba(255,255,255,0.4)}
+.alerts-demo{display:flex;flex-direction:column;gap:10px;max-width:640px}
+.alert-item{display:flex;gap:14px;align-items:flex-start;padding:16px 20px;border-radius:10px;border:1px solid}
+.alert-item.red{background:rgba(220,38,38,0.08);border-color:rgba(220,38,38,0.2)}
+.alert-item.amber{background:rgba(180,83,9,0.08);border-color:rgba(180,83,9,0.2)}
+.alert-item.green{background:rgba(0,135,90,0.08);border-color:rgba(0,135,90,0.2)}
+.alert-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px}
+.alert-dot.red{background:var(--red)}.alert-dot.amber{background:#f59e0b}.alert-dot.green{background:var(--green)}
+.alert-text h4{font-size:13px;font-weight:500;color:rgba(255,255,255,0.9);margin-bottom:3px}
+.alert-text p{font-size:12px;color:rgba(255,255,255,0.4);line-height:1.5}
+
+/* MÉTRICAS EXPANDIDAS */
+.metrics-tabs{display:flex;gap:2px;margin-bottom:2px;background:var(--border);border-radius:12px 12px 0 0;overflow:hidden}
+.metrics-tab{flex:1;padding:14px;text-align:center;font-size:12px;font-weight:500;color:var(--muted);background:var(--bg);cursor:pointer;transition:all 0.2s;border:none}
+.metrics-tab.active{background:var(--white);color:var(--accent)}
+.metrics-panel{display:none;background:var(--white);border:1px solid var(--border);border-top:none;border-radius:0 0 12px 12px;padding:24px}
+.metrics-panel.active{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric-card{padding:18px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}
+.metric-card .abbr{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.metric-card .name{font-size:11px;font-weight:500;color:var(--ink2);margin-bottom:4px}
+.metric-card .desc{font-size:11px;color:var(--muted);line-height:1.4}
+
+.etapas{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.etapa{border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.etapa-header{padding:20px 24px;display:flex;align-items:center;gap:12px}
+.etapa-header.phase1{background:var(--accent-light);border-bottom:1px solid rgba(26,86,219,0.15)}
+.etapa-header.phase2{background:var(--green-light);border-bottom:1px solid rgba(0,135,90,0.15)}
+.etapa-badge{font-size:10px;font-weight:500;letter-spacing:0.1em;text-transform:uppercase;padding:4px 10px;border-radius:100px}
+.badge-blue{background:var(--accent);color:white}.badge-green{background:var(--green);color:white}
+.etapa-title{font-size:15px;font-weight:500;color:var(--ink)}
+.etapa-body{padding:20px 24px;background:var(--white)}
+.etapa-body p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:12px}
+.feature-list{list-style:none}
+.feature-list li{font-size:13px;color:var(--ink2);padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.feature-list li:last-child{border-bottom:none}
+.feature-list li::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.etapa-body.green .feature-list li::before{background:var(--green)}
+
+.questions-section{background:var(--white);border-top:1px solid var(--border)}
+.qa-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px;background:var(--border);border-radius:12px;overflow:hidden}
+.qa-item{background:var(--white);padding:28px 32px}
+.qa-q{font-size:13px;font-weight:500;color:var(--muted);margin-bottom:8px;display:flex;align-items:flex-start;gap:8px}
+.qa-q::before{content:'Q';font-size:10px;font-weight:700;color:var(--accent);background:var(--accent-light);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.qa-a{font-size:14px;color:var(--ink);line-height:1.6}
+
+.footer{padding:60px 80px;background:var(--ink);display:flex;align-items:center;justify-content:space-between}
+.footer-title{font-family:'Playfair Display',serif;font-size:32px;font-weight:900;color:var(--white)}
+.footer-title span{color:var(--accent)}
+.footer-sub{font-size:13px;color:rgba(255,255,255,0.3);margin-top:6px}
+.footer-note{font-size:12px;color:rgba(255,255,255,0.2);text-align:right;max-width:280px;line-height:1.6}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.hero-left>*{animation:fadeUp 0.6s ease both}
+.hero-left>*:nth-child(1){animation-delay:0.1s}.hero-left>*:nth-child(2){animation-delay:0.2s}
+.hero-left>*:nth-child(3){animation-delay:0.3s}.hero-left>*:nth-child(4){animation-delay:0.4s}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-left">
+    <div class="eyebrow">Data-Buddy · Módulo de pauta</div>
+    <h1 class="hero-title">Adly<span>.</span></h1>
+    <p class="hero-sub">El analista de pauta que tu agencia necesita pero no tiene. Conecta tus datos, detecta errores y responde tus preguntas en lenguaje natural.</p>
+    <div class="tag-row">
+      <span class="tag">GoHighLevel CRM</span>
+      <span class="tag">Google Sheets</span>
+      <span class="tag">IA conversacional</span>
+      <span class="tag">Alertas automáticas</span>
+    </div>
+  </div>
+  <div class="hero-right">
+    <div class="flow-diagram">
+      <div class="flow-node"><div class="flow-icon blue">📊</div><div><div class="flow-label">GoHighLevel CRM</div><div class="flow-desc">Fuente de verdad — leads, estados, conversiones</div></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node"><div class="flow-icon amber">⚙️</div><div><div class="flow-label">Pipeline de validación</div><div class="flow-desc">Detecta y corrige inconsistencias automáticamente</div></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node active"><div class="flow-icon green">🤖</div><div><div class="flow-label">Adly — Motor de IA</div><div class="flow-desc">Analiza, recomienda y responde en lenguaje natural</div></div></div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-node"><div class="flow-icon blue">💬</div><div><div class="flow-label">Chat · WhatsApp</div><div class="flow-desc">Donde tú preguntas y recibes el análisis</div></div></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="problem-section">
+  <div class="section">
+    <div class="section-label">El problema</div>
+    <h2 class="section-title">Lo que pasa hoy sin Adly</h2>
+    <p class="section-desc">Tres problemas reales que afectan tus decisiones de pauta todos los días.</p>
+    <div class="problem-grid">
+      <div class="problem-card"><div class="num">01</div><h3>Datos que no cuadran</h3><p>El CRM dice una cosa, el Sheet otra. Leads que desaparecen, duplicados, campos vacíos. Cualquier análisis sobre datos sucios es un análisis que miente.</p></div>
+      <div class="problem-card"><div class="num">02</div><h3>Tiempo perdido analizando</h3><p>Abrir Sheets, filtrar, calcular CPL, comparar campañas. Trabajo manual que debería hacerse solo. Tú deberías estar tomando decisiones, no sacando fórmulas.</p></div>
+      <div class="problem-card"><div class="num">03</div><h3>Sin asesor disponible</h3><p>Las decisiones de pauta requieren contexto, experiencia y datos en tiempo real. Un analista experto no siempre está disponible. Adly sí.</p></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section>
+  <div class="section">
+    <div class="section-label">Cómo funciona</div>
+    <h2 class="section-title">Simple por fuera.<br>Sólido por dentro.</h2>
+    <p class="section-desc">Tú solo preguntas. Adly hace todo lo demás automáticamente antes de responderte.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">01</div><h3>Conecta tus fuentes</h3><p>Adly se conecta a GoHighLevel y Google Sheets. Lee todos los datos de tus campañas automáticamente.</p><span class="note note-blue">Una vez. No necesitas hacer nada más.</span></div>
+      <div class="step"><div class="step-num">02</div><h3>Valida automáticamente</h3><p>Antes de cualquier análisis, verifica que los datos sean consistentes. Si detecta algo raro, te avisa.</p><span class="note note-amber">Corre en segundo plano cada 30 minutos.</span></div>
+      <div class="step"><div class="step-num">03</div><h3>Calcula tus métricas</h3><p>CPL, CTR, tasas de conversión, velocidad del embudo y más — calculado solo, siempre actualizado.</p><span class="note note-blue">Sin fórmulas, sin Sheets, sin esfuerzo.</span></div>
+      <div class="step"><div class="step-num">04</div><h3>Tú preguntas, Adly responde</h3><p>¿Cuál campaña escalo? ¿Qué adset pauso? ¿Por qué bajaron las conversiones? Adly responde con datos reales y criterio experto.</p><span class="note note-green">En el chat o por WhatsApp.</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="integrity-section">
+  <div class="section">
+    <div class="section-label">Integridad de datos</div>
+    <h2 class="section-title" style="color:white">Adly detecta lo que tú no ves.</h2>
+    <p class="section-desc">Antes de responderte, verifica que los datos estén limpios. Si algo no cuadra, te lo dice antes de que tomes decisiones equivocadas.</p>
+    <div class="alerts-demo">
+      <div class="alert-item red"><div class="alert-dot red"></div><div class="alert-text"><h4>12 leads no llegaron al Sheet (12% del total)</h4><p>Posible falla en n8n. Los análisis de esta semana pueden estar incompletos.</p></div></div>
+      <div class="alert-item amber"><div class="alert-dot amber"></div><div class="alert-text"><h4>4 leads duplicados detectados</h4><p>El flujo de n8n se ejecutó dos veces. Afecta el conteo en Campaña_Retargeting.</p></div></div>
+      <div class="alert-item amber"><div class="alert-dot amber"></div><div class="alert-text"><h4>2 leads con estado desactualizado</h4><p>El Sheet no refleja el estado actual del CRM. Requiere resincronización.</p></div></div>
+      <div class="alert-item green"><div class="alert-dot green"></div><div class="alert-text"><h4>Campaña_Leads_Marzo — datos limpios</h4><p>Score de integridad 97%. Puedes tomar decisiones con confianza.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- MÉTRICAS CON TABS -->
+<section>
+  <div class="section">
+    <div class="section-label">Métricas</div>
+    <h2 class="section-title">Un experto en pauta<br>completo.</h2>
+    <p class="section-desc">Adly no solo calcula — interpreta, compara y recomienda. Haz clic en cada categoría para ver qué maneja.</p>
+
+    <div class="metrics-tabs">
+      <button class="metrics-tab active" onclick="showTab('embudo')">Embudo de conversión</button>
+      <button class="metrics-tab" onclick="showTab('pauta')">Rendimiento de pauta</button>
+      <button class="metrics-tab" onclick="showTab('comparativo')">Análisis comparativo</button>
+    </div>
+
+    <div class="metrics-panel active" id="tab-embudo">
+      <div class="metric-card"><div class="abbr">Leads</div><div class="name">Total de leads</div><div class="desc">Cuántos llegaron por campaña, adset y ad</div></div>
+      <div class="metric-card"><div class="abbr">MQL</div><div class="name">Lead calificado marketing</div><div class="desc">Tasa de conversión Lead→MQL por fuente</div></div>
+      <div class="metric-card"><div class="abbr">SQL</div><div class="name">Lead calificado ventas</div><div class="desc">Eficiencia del proceso comercial</div></div>
+      <div class="metric-card"><div class="abbr">Venta</div><div class="name">Conversión final</div><div class="desc">Tasa de cierre SQL→Venta</div></div>
+      <div class="metric-card"><div class="abbr">CPL</div><div class="name">Costo por lead</div><div class="desc">Eficiencia de adquisición de leads</div></div>
+      <div class="metric-card"><div class="abbr">Velocidad</div><div class="name">Tiempo de conversión</div><div class="desc">Días promedio Lead→Venta por campaña</div></div>
+    </div>
+
+    <div class="metrics-panel" id="tab-pauta">
+      <div class="metric-card"><div class="abbr">CTR</div><div class="name">Tasa de clics</div><div class="desc">Clics / impresiones — atractivo del anuncio</div></div>
+      <div class="metric-card"><div class="abbr">CPC</div><div class="name">Costo por clic</div><div class="desc">Eficiencia del tráfico pagado</div></div>
+      <div class="metric-card"><div class="abbr">CPM</div><div class="name">Costo por mil impresiones</div><div class="desc">Eficiencia del alcance pagado</div></div>
+      <div class="metric-card"><div class="abbr">CPMQL</div><div class="name">Costo por MQL</div><div class="desc">Costo real por lead de calidad</div></div>
+      <div class="metric-card"><div class="abbr">CPA</div><div class="name">Costo por adquisición</div><div class="desc">Costo real por venta cerrada</div></div>
+      <div class="metric-card"><div class="abbr">Frecuencia</div><div class="name">Saturación de audiencia</div><div class="desc">Frecuencia alta = audiencia quemada</div></div>
+    </div>
+
+    <div class="metrics-panel" id="tab-comparativo">
+      <div class="metric-card"><div class="abbr">Ranking</div><div class="name">Campañas por eficiencia</div><div class="desc">Cuál es la más rentable de las activas</div></div>
+      <div class="metric-card"><div class="abbr">Benchmark</div><div class="name">Comparación histórica</div><div class="desc">Esta campaña vs el promedio de los últimos 3 meses</div></div>
+      <div class="metric-card"><div class="abbr">Calidad</div><div class="name">Índice de calidad del lead</div><div class="desc">Qué campaña trae los mejores leads, no solo más</div></div>
+      <div class="metric-card"><div class="abbr">Overlap</div><div class="name">Solapamiento de audiencias</div><div class="desc">Adsets que compiten entre sí por la misma persona</div></div>
+      <div class="metric-card"><div class="abbr">Horario</div><div class="name">Mejor día y hora</div><div class="desc">Cuándo convierte mejor cada campaña</div></div>
+      <div class="metric-card"><div class="abbr">Potencial</div><div class="name">Recomendación de escala</div><div class="desc">Qué escalar, qué pausar y por qué</div></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section style="background:var(--white);border-top:1px solid var(--border)">
+  <div class="section">
+    <div class="section-label">Plan de desarrollo</div>
+    <h2 class="section-title">Dos etapas. Un objetivo.</h2>
+    <p class="section-desc">Primero algo que ya puedes usar. Después algo que trabaja solo.</p>
+    <div class="etapas">
+      <div class="etapa">
+        <div class="etapa-header phase1"><span class="etapa-badge badge-blue">Fase inicial</span><span class="etapa-title">Herramienta de consulta</span></div>
+        <div class="etapa-body">
+          <p>Tú preguntas, Adly responde. Como tener un analista experto en pauta disponible en cualquier momento.</p>
+          <ul class="feature-list">
+            <li>Conectado a tu CRM y Google Sheets</li>
+            <li>Responde preguntas en lenguaje natural</li>
+            <li>Detecta y reporta inconsistencias en datos</li>
+            <li>Calcula y compara métricas automáticamente</li>
+            <li>Disponible en chat web y WhatsApp</li>
+          </ul>
+        </div>
+      </div>
+      <div class="etapa">
+        <div class="etapa-header phase2"><span class="etapa-badge badge-green">Fase final</span><span class="etapa-title">Agente autónomo</span></div>
+        <div class="etapa-body green">
+          <p>Adly trabaja solo en segundo plano. Detecta problemas antes de que tú los notes.</p>
+          <ul class="feature-list">
+            <li>Monitoreo continuo de datos 24/7</li>
+            <li>Alertas proactivas por WhatsApp</li>
+            <li>Corrección automática de inconsistencias</li>
+            <li>Reportes semanales sin pedirlos</li>
+            <li>Recomendaciones de pauta en tiempo real</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="questions-section">
+  <div class="section">
+    <div class="section-label">Ejemplos reales</div>
+    <h2 class="section-title">Preguntas que Adly responde.</h2>
+    <p class="section-desc">Le preguntas como si hablaras con un analista. Él responde con datos reales de tus campañas.</p>
+    <div class="qa-grid">
+      <div class="qa-item"><div class="qa-q">¿Cuál de mis tres campañas activas es más rentable?</div><div class="qa-a">"Campaña_Leads_Marzo tiene el mejor CPA ($312k) y la mayor tasa de conversión Lead→Venta (8%). Campaña_Retargeting tiene el mejor CTR pero el peor costo por MQL. Te recomiendo escalar Leads_Marzo y reducir presupuesto en Branding."</div></div>
+      <div class="qa-item"><div class="qa-q">¿Qué adset debería pausar hoy?</div><div class="qa-a">"Adset_35-50 lleva 15 días con CPL 67% por encima del promedio y cero conversiones a SQL. La frecuencia está en 4.2 — la audiencia está saturada. Recomiendo pausarlo y reasignar el presupuesto a Adset_18-35."</div></div>
+      <div class="qa-item"><div class="qa-q">¿Por qué bajaron las conversiones esta semana?</div><div class="qa-a">"Detecté dos factores: 1) 12 leads no llegaron al Sheet por falla en n8n — datos incompletos. 2) Ad_Imagen_B tiene CTR caído 40% vs semana pasada. El creativo está perdiendo efectividad. Sugiero rotar el anuncio."</div></div>
+      <div class="qa-item"><div class="qa-q">¿Mis datos están bien para tomar decisiones hoy?</div><div class="qa-a">"Campaña_Leads_Marzo: score 97%, confiable. Campaña_Retargeting: score 71%, hay 4 duplicados y 2 leads con estado desactualizado. Antes de tomar decisiones sobre Retargeting, te recomiendo esperar la resincronización automática en 30 min."</div></div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div>
+    <div class="footer-title">Adly<span>.</span></div>
+    <div class="footer-sub">Data-Buddy · Módulo de pauta publicitaria · 2026</div>
+  </div>
+  <div class="footer-note">Desarrollado por Nico para la agencia de Camí.<br>Primer módulo del ecosistema Data-Buddy.</div>
+</footer>
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.metrics-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.metrics-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
