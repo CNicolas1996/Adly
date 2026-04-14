@@ -124,9 +124,9 @@ PROVEEDORES_LLM = {
 }
 
 FUENTES_DATOS = {
-    "1": ("mock",   "Mock data    — datos de prueba  ← empieza aquí"),
+    "1": ("mock",   "Mock data    — datos de prueba  <- empieza aqui"),
     "2": ("sheets", "Google Sheets— Sheet real"),
-    "3": ("meta",   "Meta + GHL  — conexión directa APIs"),
+    "3": ("meta",   "Meta + GHL  — conexion directa APIs"),
 }
 
 MODELOS_DEFAULT = {
@@ -371,14 +371,26 @@ def cargar_datos(fuente: str):
         spinner="dots2",
     ):
         time.sleep(0.6)
+        config_cols = CONFIG_DEFAULT  # se sobreescribe si el conector infiere columnas
+
         if fuente == "mock":
-            df_ghl   = generar_datos_ghl(n_leads=100)
-            df_sheet = generar_datos_sheet(df_ghl)
+            # ADLY_MOCK_CSV permite apuntar a cualquier CSV sin cambiar el menú
+            mock_csv = os.getenv("ADLY_MOCK_CSV", "")
+            if mock_csv:
+                from src.ingestion.sheets import MockConnector
+                conn        = MockConnector(csv_path=mock_csv)
+                df_ghl      = conn.leer()
+                df_sheet    = df_ghl
+                config_cols = conn.schema
+            else:
+                df_ghl   = generar_datos_ghl(n_leads=100)
+                df_sheet = generar_datos_sheet(df_ghl)
         elif fuente == "sheets":
             from src.ingestion.sheets import SheetsConnector
             conn     = SheetsConnector()
             df_sheet = conn.leer()
             df_ghl   = df_sheet
+            config_cols = conn.schema  # schema inferido por ColumnMapper
         else:
             df_ghl   = generar_datos_ghl(n_leads=100)
             df_sheet = generar_datos_sheet(df_ghl)
@@ -386,7 +398,7 @@ def cargar_datos(fuente: str):
         resultado = DataValidator().validar(df_ghl, df_sheet)
         manager   = AlertManager()
         manager.evaluar(resultado)
-        calc      = MetricsCalculator(config=CONFIG_DEFAULT)
+        calc      = MetricsCalculator(config=config_cols)
         metricas  = calc.calcular(df_ghl, nivel="campana")
         resumen   = calc.resumen_para_llm(metricas, nivel="campana")
 
