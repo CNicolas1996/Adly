@@ -99,23 +99,13 @@ class SheetsConnector(BaseConnector):
         return df
 
     def detectar_schema(self, df: pd.DataFrame) -> dict:
-        schema = {
-            "id":      self._buscar_columna(df, ["id", "ghl_id", "lead_id"]),
-            "campana": self._buscar_columna(df, ["campa", "campaign"]),
-            "adset":   self._buscar_columna(df, ["adset"]),
-            "ad":      self._buscar_columna(df, ["ad", "anuncio"]),
-            "estado":  self._buscar_columna(df, ["estado", "status", "etapa"]),
-            "costo":   self._buscar_columna(df, ["costo", "cost", "cpl"]),
-            "fecha":   self._buscar_columna(df, ["fecha", "date", "created"]),
-            "valor":   self._buscar_columna(df, ["valor", "value", "venta"]),
-        }
-
-        print(f"\n[SheetsConnector] Schema detectado:")
-        for key, col in schema.items():
-            status = f"✓  {col}" if col else "✗  no encontrada"
-            print(f"  {key:10} → {status}")
-
-        return schema
+        """
+        Infiere el mapeo de columnas usando LLM (via ColumnMapper).
+        Devuelve un dict compatible con MetricsCalculator(config=...).
+        """
+        from src.processing.column_mapper import ColumnMapper
+        mapper = ColumnMapper()
+        return mapper.mapear(df, cache_key=self.sheet_id)
 
     def _buscar_columna(self, df: pd.DataFrame, palabras_clave: list) -> str | None:
         for col in df.columns:
@@ -159,23 +149,13 @@ class MockConnector(BaseConnector):
         return df
 
     def detectar_schema(self, df: pd.DataFrame) -> dict:
-        schema = {
-            "id":      self._buscar_columna(df, ["id", "ghl_id"]),
-            "campana": self._buscar_columna(df, ["campa", "campaign"]),
-            "adset":   self._buscar_columna(df, ["adset"]),
-            "ad":      self._buscar_columna(df, ["ad", "anuncio"]),
-            "estado":  self._buscar_columna(df, ["estado", "status"]),
-            "costo":   self._buscar_columna(df, ["costo", "cost"]),
-            "fecha":   self._buscar_columna(df, ["fecha", "date"]),
-            "valor":   self._buscar_columna(df, ["valor", "venta"]),
-        }
-        return schema
-
-    def _buscar_columna(self, df: pd.DataFrame, palabras_clave: list) -> str | None:
-        for col in df.columns:
-            if any(kw in col.lower() for kw in palabras_clave):
-                return col
-        return None
+        """
+        Infiere el mapeo de columnas usando LLM (via ColumnMapper).
+        Devuelve un dict compatible con MetricsCalculator(config=...).
+        """
+        from src.processing.column_mapper import ColumnMapper
+        mapper = ColumnMapper()
+        return mapper.mapear(df, cache_key=self.csv_path)
 
     def preview(self, df: pd.DataFrame, n: int = 3) -> None:
         print(f"\n[MockConnector] Preview ({n} filas):")

@@ -125,14 +125,103 @@ def exportar_mock(output_dir: str = "data/raw") -> tuple[pd.DataFrame, pd.DataFr
 
 
 # ─────────────────────────────────────────
+# MOCK AMBIGUO — columnas en inglés, estados distintos
+# Para probar ColumnMapper + Sheets real
+# ─────────────────────────────────────────
+
+def generar_datos_ambiguos(n_leads: int = 300) -> pd.DataFrame:
+    """
+    Dataset con estructura completamente distinta al mock estándar.
+    Diseñado para que Adly tenga que inferir el contexto por sí solo.
+
+    Diferencias intencionales:
+    - Nombres de columnas en inglés y abreviados
+    - Estados del embudo en inglés (qualified, opportunity, closed_won, cold, new)
+    - Columna de fecha llamada 'record_ts' (no 'fecha' ni 'date')
+    - Inversión llamada 'spend' con valores en USD
+    - Ingresos llamados 'revenue'
+    - ID llamado 'contact_id'
+    - Campaña llamada 'utm_campaign'
+    """
+    random.seed(77)
+    fecha_base = datetime(2026, 1, 15)
+
+    CAMPAIGNS = [
+        "paid_search_q1",
+        "social_retargeting_feb",
+        "brand_awareness_mar",
+        "influencer_collab_q1",
+    ]
+    ADSETS_ENG = ["lookalike_25-40", "interest_fitness", "retarget_visitors"]
+    ADS_ENG    = ["video_15s", "carousel_3img", "static_banner"]
+    # Estados en inglés — Adly debe inferir cuál es MQL, SQL, Venta
+    STAGES     = ["new", "qualified", "opportunity", "closed_won", "lost"]
+    WEIGHTS    = [0.40, 0.25, 0.18, 0.10, 0.07]
+
+    registros = []
+    for i in range(1, n_leads + 1):
+        dias = random.randint(0, 85)   # ~3 meses de datos
+        ts   = fecha_base + timedelta(days=dias)
+        stage = random.choices(STAGES, weights=WEIGHTS)[0]
+
+        registros.append({
+            "contact_id":  f"CRM-{i:05d}",
+            "full_name":   f"Contact_{i:05d}",
+            "email":       f"contact{i}@domain.com",
+            "utm_campaign": random.choice(CAMPAIGNS),
+            "utm_adset":   random.choice(ADSETS_ENG),
+            "utm_ad":      random.choice(ADS_ENG),
+            "funnel_stage": stage,
+            "spend":       round(random.uniform(5, 80), 2),        # USD por lead
+            "revenue":     round(random.uniform(500, 5000), 2) if stage == "closed_won" else 0.0,
+            "record_ts":   ts.strftime("%Y-%m-%dT%H:%M:%SZ"),      # ISO 8601 — sin "fecha"
+            "country":     random.choice(["CO", "MX", "AR", "US"]),
+            "source":      random.choice(["facebook", "google", "tiktok"]),
+        })
+
+    return pd.DataFrame(registros)
+
+
+def exportar_mock_ambiguo(output_dir: str = "data/raw") -> pd.DataFrame:
+    """
+    Genera y guarda el dataset ambiguo.
+    Este CSV está pensado para subirse a Google Sheets y probar ColumnMapper.
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    df = generar_datos_ambiguos(n_leads=300)
+    path = f"{output_dir}/mock_ambiguo.csv"
+    df.to_csv(path, index=False)
+
+    print(f"[Ambiguo] {len(df)} registros -> {path}")
+    print(f"\nColumnas generadas (intencionalmente distintas al schema de Adly):")
+    for col in df.columns:
+        muestra = df[col].dropna().iloc[0] if not df[col].empty else "-"
+        print(f"  {col:20} -> ej: {muestra}")
+    print(f"\nEstados del embudo: {df['funnel_stage'].value_counts().to_dict()}")
+    print(f"\nSube data/raw/mock_ambiguo.csv a tu Google Sheet para probar ColumnMapper.")
+
+    return df
+
+
+# ─────────────────────────────────────────
 # MAIN — correr directamente para generar datos
 # ─────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(">> Generando datos de prueba...\n")
-    df_ghl, df_sheet = exportar_mock()
-    print("\n>> Muestra GHL (primeras 3 filas):")
-    print(df_ghl.head(3).to_string())
-    print("\n>> Muestra Sheet (primeras 3 filas):")
-    print(df_sheet.head(3).to_string())
-    print("\n>> Mock data listo.")
+    import sys
+    modo = sys.argv[1] if len(sys.argv) > 1 else "standard"
+
+    if modo == "ambiguo":
+        print(">> Generando mock ambiguo (para Sheets + ColumnMapper)...\n")
+        exportar_mock_ambiguo()
+    else:
+        print(">> Generando datos de prueba...\n")
+        df_ghl, df_sheet = exportar_mock()
+        print("\n>> Muestra GHL (primeras 3 filas):")
+        print(df_ghl.head(3).to_string())
+        print("\n>> Muestra Sheet (primeras 3 filas):")
+        print(df_sheet.head(3).to_string())
+        print("\n>> Mock data listo.")
+        print("\n>> Para generar mock ambiguo: python src/ingestion/mock_data.py ambiguo")
