@@ -9,11 +9,11 @@ from typing import Optional
 
 
 # ─────────────────────────────────────────
-# CONFIG POR DEFECTO — Camí
-# Cada cliente tendrá su propia config
+# CONFIG POR DEFECTO
+# Cada cliente puede pasar su propia config al instanciar MetricsCalculator
 # ─────────────────────────────────────────
 
-CONFIG_CAMI = {
+CONFIG_DEFAULT = {
     "col_campana":   "campana",
     "col_adset":     "adset",
     "col_ad":        "ad",
@@ -50,7 +50,7 @@ class MetricsCalculator:
     """
 
     def __init__(self, config: dict = None):
-        self.config = config or CONFIG_CAMI
+        self.config = config or CONFIG_DEFAULT
 
     def calcular(
         self,
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     print(">> Calculando métricas con mock data...\n")
 
     df = generar_datos_ghl(n_leads=100)
-    calc = MetricsCalculator(config=CONFIG_CAMI)
+    calc = MetricsCalculator(config=CONFIG_DEFAULT)
 
     # Por campaña
     print("── POR CAMPAÑA ──")
