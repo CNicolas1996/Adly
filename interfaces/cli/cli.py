@@ -295,11 +295,19 @@ def onboarding() -> dict:
 
     if config["fuente"] == "sheets":
         config["sheet_id"] = Prompt.ask(f"  [{C['accent']}]Google Sheet ID[/{C['accent']}]")
+        config["mock_csv"]  = ""
     elif config["fuente"] == "meta":
         config["meta_token"]  = Prompt.ask(f"  [{C['accent']}]Meta Access Token[/{C['accent']}]", password=True)
         config["ghl_api_key"] = Prompt.ask(f"  [{C['accent']}]GHL API Key[/{C['accent']}]",       password=True)
+        config["mock_csv"]    = ""
     else:
         config["sheet_id"] = ""
+        console.print(f"  [{C['dim']}]CSV de prueba (Enter para usar datos generados):[/{C['dim']}]")
+        mock_csv = Prompt.ask(
+            f"  [{C['accent']}]Ruta CSV[/{C['accent']}]",
+            default="",
+        )
+        config["mock_csv"] = mock_csv
 
     _guardar_env(config)
 
@@ -332,6 +340,7 @@ def _guardar_env(config: dict) -> None:
         "ADLY_LLM_BASE_URL":   config.get("llm_base_url", ""),
         "ADLY_LLM_FALLBACK":   "ollama,gemini,groq",
         "ADLY_FUENTE":         config.get("fuente", "mock"),
+        "ADLY_MOCK_CSV":       config.get("mock_csv", ""),
         "GOOGLE_SHEET_ID":     config.get("sheet_id", ""),
         "META_ACCESS_TOKEN":   config.get("meta_token", ""),
         "GHL_API_KEY":         config.get("ghl_api_key", ""),
@@ -346,6 +355,7 @@ def cargar_config() -> dict:
         "llm_provider": os.getenv("ADLY_LLM_PROVIDER",  "ollama"),
         "llm_model":    os.getenv("ADLY_LLM_MODEL",     ""),
         "fuente":       os.getenv("ADLY_FUENTE",         "mock"),
+        "mock_csv":     os.getenv("ADLY_MOCK_CSV",       ""),
     }
 
 
@@ -359,7 +369,7 @@ def necesita_onboarding() -> bool:
 # CARGA DE DATOS
 # ─────────────────────────────────────────
 
-def cargar_datos(fuente: str):
+def cargar_datos(fuente: str, mock_csv: str = ""):
     sys.path.insert(0, ".")
     from src.ingestion.mock_data import generar_datos_ghl, generar_datos_sheet
     from src.processing.validation import DataValidator
@@ -374,8 +384,9 @@ def cargar_datos(fuente: str):
         config_cols = CONFIG_DEFAULT  # se sobreescribe si el conector infiere columnas
 
         if fuente == "mock":
-            # ADLY_MOCK_CSV permite apuntar a cualquier CSV sin cambiar el menú
-            mock_csv = os.getenv("ADLY_MOCK_CSV", "")
+            # mock_csv desde onboarding o variable de entorno como fallback
+            if not mock_csv:
+                mock_csv = os.getenv("ADLY_MOCK_CSV", "")
             if mock_csv:
                 from src.ingestion.sheets import MockConnector
                 conn        = MockConnector(csv_path=mock_csv)
@@ -641,7 +652,7 @@ def main() -> None:
 
     metricas = resumen_llm = resultado = manager = None
     try:
-        _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"])
+        _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
     except Exception as e:
         console.print(f"\n  [{C['error']}]✗ Error cargando datos: {e}[/{C['error']}]\n")
 
@@ -690,7 +701,7 @@ def main() -> None:
                 console.print(f"  [{C['warning']}]Sin métricas. Usa /refresh.[/{C['warning']}]\n")
         elif cmd == "/refresh":
             try:
-                _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"])
+                _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
                 if engine and resumen_llm:
                     engine.set_contexto(resumen_llm)
                     engine.limpiar_memoria()
