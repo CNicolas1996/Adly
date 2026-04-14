@@ -364,7 +364,7 @@ def cargar_datos(fuente: str):
     from src.ingestion.mock_data import generar_datos_ghl, generar_datos_sheet
     from src.processing.validation import DataValidator
     from src.processing.alerts import AlertManager
-    from src.processing.metrics import MetricsCalculator, CONFIG_CAMI
+    from src.processing.metrics import MetricsCalculator, CONFIG_DEFAULT
 
     with console.status(
         f"  [{C['primary']}]Cargando [{fuente.upper()}]...[/{C['primary']}]",
@@ -386,7 +386,7 @@ def cargar_datos(fuente: str):
         resultado = DataValidator().validar(df_ghl, df_sheet)
         manager   = AlertManager()
         manager.evaluar(resultado)
-        calc      = MetricsCalculator(config=CONFIG_CAMI)
+        calc      = MetricsCalculator(config=CONFIG_DEFAULT)
         metricas  = calc.calcular(df_ghl, nivel="campana")
         resumen   = calc.resumen_para_llm(metricas, nivel="campana")
 
@@ -523,7 +523,7 @@ def cmd_estado(engine, config: dict) -> None:
     mem = engine.memoria.resumen() if engine else "Engine no iniciado"
     console.print(Panel(
         Text.assemble(
-            ("  Cliente  ", C["dim"]), (config["nombre"],               f"bold {C['accent']}"),  ("\n",""),
+            ("  Usuario  ", C["dim"]), (config["nombre"],               f"bold {C['accent']}"),  ("\n",""),
             ("  LLM      ", C["dim"]), (config["llm_provider"],         f"bold {C['white']}"),   ("\n",""),
             ("  Modelo   ", C["dim"]), (config.get("llm_model","—"),    C["muted"]),              ("\n",""),
             ("  Fuente   ", C["dim"]), (config["fuente"],               f"bold {C['white']}"),   ("\n",""),
@@ -611,7 +611,7 @@ def renderizar_respuesta(respuesta) -> None:
     console.print()
     console.print(f"  {respuesta.respuesta}")
     console.print()
-    if respuesta.accion and respuesta.accion != "Sin recomendación":
+    if respuesta.accion:
         console.print(
             f"  [{C['accent']}]→ Acción:[/{C['accent']}] "
             f"[{C['white']}]{respuesta.accion}[/{C['white']}]"
@@ -637,16 +637,16 @@ def main() -> None:
     try:
         sys.path.insert(0, ".")
         from src.ai.engine import AdlyEngine, LLMFactory
-        from src.processing.metrics import CONFIG_CAMI
+        from src.processing.metrics import CONFIG_DEFAULT
         engine = AdlyEngine(llm=LLMFactory.crear(config["llm_provider"]))
         if resumen_llm:
             engine.set_contexto(resumen_llm)
     except Exception as e:
         console.print(f"\n  [{C['warning']}]⚠ Engine: {e}[/{C['warning']}]")
         try:
-            from src.processing.metrics import CONFIG_CAMI
+            from src.processing.metrics import CONFIG_DEFAULT
         except Exception:
-            CONFIG_CAMI = {"col_campana": "campana"}
+            CONFIG_DEFAULT = {"col_campana": "campana"}
 
     if resultado and manager:
         mostrar_estado_inicial(config, resultado, manager)
@@ -674,7 +674,7 @@ def main() -> None:
             cmd_alertas(manager) if manager else \
                 console.print(f"  [{C['warning']}]Sin alertas.[/{C['warning']}]\n")
         elif cmd == "/metricas":
-            cmd_metricas(metricas, CONFIG_CAMI.get("col_campana","campana")) if metricas is not None else \
+            cmd_metricas(metricas, CONFIG_DEFAULT.get("col_campana","campana")) if metricas is not None else \
                 console.print(f"  [{C['warning']}]Sin métricas. Usa /refresh.[/{C['warning']}]\n")
         elif cmd == "/refresh":
             try:
@@ -694,7 +694,7 @@ def main() -> None:
         elif cmd == "/guardar":
             cmd_guardar(historial)
         elif cmd == "/dashboard":
-            cmd_dashboard(metricas, CONFIG_CAMI) if metricas is not None else \
+            cmd_dashboard(metricas, CONFIG_DEFAULT) if metricas is not None else \
                 console.print(f"  [{C['warning']}]Sin datos.[/{C['warning']}]\n")
         else:
             if not engine:
