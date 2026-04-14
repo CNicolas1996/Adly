@@ -406,7 +406,10 @@ def cargar_datos(fuente: str, mock_csv: str = ""):
             df_ghl   = generar_datos_ghl(n_leads=100)
             df_sheet = generar_datos_sheet(df_ghl)
 
-        resultado = DataValidator().validar(df_ghl, df_sheet)
+        resultado = DataValidator(
+            col_id     = config_cols.get("col_leads",  "ghl_id"),
+            col_estado = config_cols.get("col_estado", "estado"),
+        ).validar(df_ghl, df_sheet)
         manager   = AlertManager()
         manager.evaluar(resultado)
         calc      = MetricsCalculator(config=config_cols)
