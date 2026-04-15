@@ -547,7 +547,9 @@ RESTRICCIONES DURAS:
 - Nunca inventes métricas ni números que no están en los datos.
 - Nunca pongas acción si no tienes claridad suficiente — mejor pregunta.
 - Responde siempre en español.
-- Devuelve SOLO el JSON. Sin texto antes, sin texto después, sin bloques markdown."""
+- Devuelve SOLO el JSON. Sin texto antes, sin texto después, sin bloques markdown.
+- PROHIBIDO dentro de los valores del JSON: asteriscos (**texto** o *texto*), almohadillas (## Título), guiones como viñetas (- item), backticks (`code`). El texto en "respuesta" y "accion" debe ser prosa plana sin ningún símbolo de markdown.
+- Para listas dentro de "respuesta" usa punto y coma o numeración simple. Ejemplo correcto: "1. CPL: $15k 2. ROAS: 1.2 3. Tasa MQL: 28%". Nunca: "**CPL**: $15k\\n- ROAS: 1.2"."""
 
 
 # ─────────────────────────────────────────

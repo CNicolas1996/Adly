@@ -626,22 +626,32 @@ def renderizar_respuesta(respuesta) -> None:
         "warning":  (C["warning"], "WARN"),
         "critical": (C["error"],   "CRIT"),
     }
-    color, label = sev_map.get(respuesta.severidad, (C["primary"],"INFO"))
-    cc = C["success"] if respuesta.confianza>=0.8 else C["warning"] if respuesta.confianza>=0.5 else C["error"]
+    color, label = sev_map.get(respuesta.severidad, (C["primary"], "INFO"))
+    cc = C["success"] if respuesta.confianza >= 0.8 else C["warning"] if respuesta.confianza >= 0.5 else C["error"]
 
-    console.print(Text.assemble(
+    titulo = Text.assemble(
         (f" {label} ", f"bold reverse {color}"),
         ("  confianza: ", C["dim"]),
         (f"{respuesta.confianza:.0%}", f"bold {cc}"),
+    )
+
+    console.print(Panel(
+        Text(f"  {respuesta.respuesta}", style=C["white"]),
+        title=titulo,
+        border_style=color,
+        padding=(1, 2),
     ))
-    console.print()
-    console.print(f"  {respuesta.respuesta}")
-    console.print()
+
     if respuesta.accion:
-        console.print(
-            f"  [{C['accent']}]→ Acción:[/{C['accent']}] "
-            f"[{C['white']}]{respuesta.accion}[/{C['white']}]"
-        )
+        console.print(Panel(
+            Text.assemble(
+                ("  -> ", f"bold {C['accent']}"),
+                (respuesta.accion, C["white"]),
+            ),
+            border_style=C["accent"],
+            padding=(0, 2),
+        ))
+
     console.print()
 
 # ─────────────────────────────────────────
