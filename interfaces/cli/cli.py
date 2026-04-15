@@ -384,7 +384,6 @@ def cargar_datos(fuente: str, mock_csv: str = ""):
         config_cols = CONFIG_DEFAULT  # se sobreescribe si el conector infiere columnas
 
         if fuente == "mock":
-            # mock_csv desde onboarding o variable de entorno como fallback
             if not mock_csv:
                 mock_csv = os.getenv("ADLY_MOCK_CSV", "")
             if mock_csv:
@@ -401,57 +400,37 @@ def cargar_datos(fuente: str, mock_csv: str = ""):
             conn     = SheetsConnector()
             df_sheet = conn.leer()
             df_ghl   = df_sheet
-            config_cols = conn.schema  # schema inferido por ColumnMapper
+            config_cols = conn.schema
         else:
-            df_ghl   = generar_datos_ghl(n_leads=100)
-            df_sheet = generar_datos_sheet(df_ghl)
+            df_ghl = df_sheet = generar_datos_ghl(n_leads=100)
 
-        resultado = DataValidator(
-            col_id     = config_cols.get("col_leads",  "ghl_id"),
-            col_estado = config_cols.get("col_estado", "estado"),
-        ).validar(df_ghl, df_sheet)
-        manager   = AlertManager()
-        manager.evaluar(resultado)
-        calc      = MetricsCalculator(config=config_cols)
-        metricas  = calc.calcular(df_ghl, nivel="campana")
-        resumen   = calc.resumen_para_llm(metricas, nivel="campana")
+        validator  = DataValidator()
+        resultado  = validator.validar(df_ghl, df_sheet)
+        calc       = MetricsCalculator(config=config_cols)
+        metricas   = calc.calcular(df_ghl, nivel="campana")
+        resumen_llm = calc.resumen_para_llm(metricas, nivel="campana")
+        schema_llm  = calc.resumen_schema(df_ghl)  # v2 — schema del raw
+        manager    = AlertManager(resultado, metricas, config_cols)
 
-    return df_ghl, df_sheet, metricas, resumen, resultado, manager
+    return df_ghl, df_sheet, metricas, resumen_llm, schema_llm, resultado, manager, validator, calc
+
 
 # ─────────────────────────────────────────
-# PANTALLA PRINCIPAL
+# ESTADO INICIAL
 # ─────────────────────────────────────────
 
-def mostrar_estado_inicial(config: dict, resultado, manager) -> None:
-    limpiar_pantalla()
-    console.print()
-
-    h = Text.assemble(
-        ("  ▸ ADLY  ",                    f"bold {C['primary']}"),
-        (f"{VERSION}  ",                  C["dim"]),
-        ("│  ",                           C["dim"]),
-        (config["nombre"],                f"bold {C['accent']}"),
-        ("  │  LLM: ",                   C["dim"]),
-        (config["llm_provider"].upper(), f"bold {C['white']}"),
-        ("  │  ",                         C["dim"]),
-        (config["fuente"].upper(),        C["muted"]),
-    )
-    console.print(Panel(h, border_style=C["primary"], padding=(0, 1)))
-    console.print()
-
-    score      = resultado.score
-    sc         = C["success"] if score >= 90 else C["warning"] if score >= 70 else C["error"]
-    n_crit     = sum(1 for a in manager.alertas if a.nivel.value == "critica")
-    n_warn     = sum(1 for a in manager.alertas if a.nivel.value == "advertencia")
-
+def mostrar_estado_inicial(config, resultado, manager) -> None:
+    n_crit = sum(1 for a in manager.alertas if a.nivel.value == "critica")
+    n_warn = sum(1 for a in manager.alertas if a.nivel.value == "advertencia")
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-    t.add_column(style=C["dim"], width=20)
+    t.add_column(style=C["dim"],   width=14)
     t.add_column(style=C["white"])
-    t.add_row("Registros GHL",   str(resultado.total_ghl))
-    t.add_row("Registros Sheet", str(resultado.total_sheet))
-    t.add_row("Integridad", Text(
-        f"{'OK' if score>=90 else 'WARN' if score>=70 else 'CRIT'}  {score:.1f}%",
-        style=f"bold {sc}"
+    t.add_row("Usuario", Text(config["nombre"],       style=f"bold {C['accent']}"))
+    t.add_row("LLM",     Text(config["llm_provider"], style=f"bold {C['primary']}"))
+    t.add_row("Fuente",  Text(config["fuente"],       style=C["muted"]))
+    t.add_row("Score",   Text(
+        f"{resultado.score:.1f}%",
+        style=f"bold {C['success'] if resultado.score>=90 else C['warning'] if resultado.score>=70 else C['error']}"
     ))
     t.add_row("Alertas", Text(
         f"{'[CRIT] '+str(n_crit)+' criticas   ' if n_crit else ''}"
@@ -482,22 +461,25 @@ def mostrar_estado_inicial(config: dict, resultado, manager) -> None:
 
 def cmd_ayuda() -> None:
     t = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-    t.add_column(style=f"bold {C['accent']}", width=16)
+    t.add_column(style=f"bold {C['accent']}", width=30)
     t.add_column(style=C["muted"])
     for cmd, desc in [
-        ("/alertas",    "Reporte de integridad de datos"),
-        ("/metricas",   "Resumen de todas las campañas"),
-        ("/head [N]",   "Primeras N filas del dataset (default: 5)"),
-        ("/sample [N]", "N filas aleatorias (default: 5)"),
-        ("/describe",   "Estadísticas numéricas del dataset activo"),
-        ("/exportar",   "Guarda el dataset activo como CSV"),
-        ("/refresh",    "Recargar datos desde la fuente"),
-        ("/limpiar",    "Nueva conversación"),
-        ("/estado",     "Estado del engine y LLM"),
-        ("/guardar",    "Exportar conversación a CSV"),
-        ("/dashboard",  "Generar dashboard HTML"),
-        ("/ayuda",      "Esta pantalla"),
-        ("salir",       "Cerrar Adly"),
+        ("/alertas",                           "Reporte de integridad de datos"),
+        ("/metricas",                          "Resumen de todas las campañas"),
+        ("/head [N]",                          "Primeras N filas del dataset (default: 5)"),
+        ("/sample [N]",                        "N filas aleatorias (default: 5)"),
+        ("/describe",                          "Estadísticas numéricas del dataset activo"),
+        ("/exportar",                          "Guarda el dataset activo como CSV"),
+        ("/refresh",                           "Recargar datos desde la fuente"),
+        ("/limpiar",                           "Nueva conversación"),
+        ("/estado",                            "Estado del engine y LLM"),
+        ("/guardar",                           "Exportar conversación a CSV"),
+        ("/dashboard",                         "Generar dashboard HTML"),
+        ("/limpiar_duplicados",                "Eliminar filas duplicadas del dataset"),
+        ("/rellenar [columna] [estrategia]",   "Rellenar nulos — estrategias: media|mediana|moda|valor"),
+        ("/eliminar_por [col] [op] [valor]",   "Filtrar filas — ops: == != > < >= <= isnull notnull"),
+        ("/ayuda",                             "Esta pantalla"),
+        ("salir",                              "Cerrar Adly"),
     ]:
         t.add_row(cmd, desc)
     console.print(Panel(t, title=f"[{C['accent']}] COMANDOS [/{C['accent']}]", border_style=C["accent"]))
@@ -700,10 +682,17 @@ def cmd_exportar_df(df) -> None:
 
 
 # ─────────────────────────────────────────
-# RENDERIZAR RESPUESTA
+# RENDERIZAR RESPUESTA — v2
 # ─────────────────────────────────────────
 
 def renderizar_respuesta(respuesta) -> None:
+    """
+    v2 — detecta respuesta.tipo y renderiza accordingly:
+      texto  → Panel con texto (comportamiento original)
+      tabla  → Rich Table con respuesta.columnas + respuesta.datos
+      lista  → Panel con numeración limpia
+      debug  → Panel monospace
+    """
     sev_map = {
         "info":     (C["primary"], "INFO"),
         "warning":  (C["warning"], "WARN"),
@@ -718,13 +707,70 @@ def renderizar_respuesta(respuesta) -> None:
         (f"{respuesta.confianza:.0%}", f"bold {cc}"),
     )
 
-    console.print(Panel(
-        Text(f"  {respuesta.respuesta}", style=C["white"]),
-        title=titulo,
-        border_style=color,
-        padding=(1, 2),
-    ))
+    tipo = getattr(respuesta, "tipo", "texto")
 
+    # ── TABLA ───────────────────────────
+    if tipo == "tabla" and getattr(respuesta, "columnas", []) and getattr(respuesta, "datos", []):
+        # Texto intro si existe
+        if respuesta.respuesta:
+            console.print(Panel(
+                Text(f"  {respuesta.respuesta}", style=C["white"]),
+                title=titulo,
+                border_style=color,
+                padding=(1, 2),
+            ))
+
+        # Rich Table
+        t = Table(
+            box=box.SIMPLE_HEAD,
+            border_style=color,
+            header_style=f"bold {color}",
+            padding=(0, 1),
+            show_lines=False,
+        )
+        for col in respuesta.columnas:
+            # Detectar si la columna es numérica para alinear a la derecha
+            es_num = _es_columna_numerica(col, respuesta.datos)
+            t.add_column(str(col), style=C["muted"], justify="right" if es_num else "left")
+
+        for fila in respuesta.datos:
+            t.add_row(*[str(fila.get(col, "—")) for col in respuesta.columnas])
+
+        console.print(Panel(
+            t,
+            title=f"[{color}] TABLA ({len(respuesta.datos)} filas) [/{color}]",
+            border_style=color,
+            padding=(0, 1),
+        ))
+
+    # ── LISTA ───────────────────────────
+    elif tipo == "lista":
+        console.print(Panel(
+            Text(f"  {respuesta.respuesta}", style=C["white"]),
+            title=titulo,
+            border_style=color,
+            padding=(1, 2),
+        ))
+
+    # ── DEBUG ───────────────────────────
+    elif tipo == "debug":
+        console.print(Panel(
+            Text(respuesta.respuesta, style=f"bold {C['muted']}"),
+            title=titulo,
+            border_style=C["dim"],
+            padding=(1, 2),
+        ))
+
+    # ── TEXTO (default) ─────────────────
+    else:
+        console.print(Panel(
+            Text(f"  {respuesta.respuesta}", style=C["white"]),
+            title=titulo,
+            border_style=color,
+            padding=(1, 2),
+        ))
+
+    # Acción siempre al final (todos los tipos)
     if respuesta.accion:
         console.print(Panel(
             Text.assemble(
@@ -737,6 +783,192 @@ def renderizar_respuesta(respuesta) -> None:
 
     console.print()
 
+
+def _es_columna_numerica(col: str, datos: list) -> bool:
+    """Heurística — si los primeros valores de la columna parecen numéricos, alinear derecha."""
+    for fila in datos[:3]:
+        v = str(fila.get(col, "")).strip().replace("$", "").replace(",", "").replace("%", "")
+        try:
+            float(v)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+# ─────────────────────────────────────────
+# COMANDOS DE CLEANUP — helpers
+# ─────────────────────────────────────────
+
+def _recalcular_contexto(df_ghl, engine, calc):
+    """
+    Recalcula métricas y schema tras modificar df_ghl.
+    Actualiza engine.set_contexto_completo() automáticamente.
+    Retorna (metricas, resumen_llm, schema_llm).
+    """
+    try:
+        metricas    = calc.calcular(df_ghl, nivel="campana")
+        resumen_llm = calc.resumen_para_llm(metricas, nivel="campana")
+        schema_llm  = calc.resumen_schema(df_ghl)
+        if engine:
+            engine.set_contexto_completo(resumen_llm, schema_llm)
+            engine.limpiar_memoria()
+        return metricas, resumen_llm, schema_llm
+    except Exception as e:
+        console.print(f"  [{C['warning']}]⚠ No se pudo recalcular contexto: {e}[/{C['warning']}]\n")
+        return None, None, None
+
+
+def cmd_limpiar_duplicados(df_ghl, engine, validator, calc):
+    """
+    /limpiar_duplicados
+    Elimina filas duplicadas y actualiza el engine.
+    """
+    if df_ghl is None or df_ghl.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos.[/{C['warning']}]\n")
+        return df_ghl
+
+    df_limpio, reporte = validator.limpiar_duplicados(df_ghl)
+
+    if reporte.get("error"):
+        console.print(f"  [{C['error']}]✗ {reporte['error']}[/{C['error']}]\n")
+        return df_ghl
+
+    n = reporte["eliminados"]
+    if n == 0:
+        console.print(f"  [{C['success']}]✓ Sin duplicados — datos ya están limpios.[/{C['success']}]\n")
+        return df_ghl
+
+    ejemplos = reporte.get("ejemplos_ids", [])
+    console.print(
+        f"  [{C['success']}]✓ Eliminados:[/{C['success']}] "
+        f"[{C['accent']}]{n} duplicados[/{C['accent']}]"
+        f"  [{C['dim']}]IDs: {ejemplos}{'...' if len(ejemplos)==5 else ''}[/{C['dim']}]"
+    )
+
+    metricas_new, _, _ = _recalcular_contexto(df_limpio, engine, calc)
+    if metricas_new is not None:
+        console.print(f"  [{C['dim']}]Contexto actualizado — {len(df_limpio)} filas activas.[/{C['dim']}]\n")
+
+    return df_limpio
+
+
+def cmd_rellenar(df_ghl, engine, validator, calc, partes: list):
+    """
+    /rellenar [columna] [estrategia]
+    Rellena nulos en columna con estrategia dada.
+    Uso: /rellenar costo_lead media
+         /rellenar estado moda
+    """
+    if df_ghl is None or df_ghl.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos.[/{C['warning']}]\n")
+        return df_ghl
+
+    if len(partes) < 2:
+        console.print(f"  [{C['warning']}]Uso: /rellenar [columna] [media|mediana|moda|valor_custom][/{C['warning']}]\n")
+        return df_ghl
+
+    columna    = partes[1]
+    estrategia = partes[2] if len(partes) > 2 else "media"
+    valor_custom = partes[3] if len(partes) > 3 and estrategia == "valor_custom" else None
+
+    # Convertir valor_custom a número si aplica
+    if valor_custom is not None:
+        try:
+            valor_custom = float(valor_custom)
+        except ValueError:
+            pass  # dejar como string
+
+    df_nuevo, reporte = validator.rellenar_nulos(df_ghl, columna, estrategia, valor_custom)
+
+    if reporte.get("error"):
+        console.print(f"  [{C['error']}]✗ {reporte['error']}[/{C['error']}]\n")
+        return df_ghl
+
+    n = reporte.get("rellenados", 0)
+    val = reporte.get("valor_usado")
+    val_str = f"{val:,.2f}" if isinstance(val, float) else str(val)
+
+    if n == 0:
+        console.print(f"  [{C['success']}]✓ Sin nulos en '{columna}' — nada que rellenar.[/{C['success']}]\n")
+        return df_ghl
+
+    console.print(
+        f"  [{C['success']}]✓ Rellenados:[/{C['success']}] "
+        f"[{C['accent']}]{n} nulos[/{C['accent']}] en "
+        f"[{C['primary']}]{columna}[/{C['primary']}] "
+        f"  [{C['dim']}]estrategia={estrategia} valor={val_str}[/{C['dim']}]"
+    )
+
+    _recalcular_contexto(df_nuevo, engine, calc)
+    console.print(f"  [{C['dim']}]Contexto actualizado.[/{C['dim']}]\n")
+
+    return df_nuevo
+
+
+def cmd_eliminar_por(df_ghl, engine, validator, calc, partes: list):
+    """
+    /eliminar_por [columna] [operador] [valor]
+    Elimina filas que cumplen el criterio.
+    Uso: /eliminar_por costo_lead <= 0
+         /eliminar_por estado == nan
+         /eliminar_por email isnull
+    """
+    if df_ghl is None or df_ghl.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos.[/{C['warning']}]\n")
+        return df_ghl
+
+    OPERADORES_UNARIOS = {"isnull", "notnull"}
+
+    if len(partes) < 3:
+        console.print(
+            f"  [{C['warning']}]Uso: /eliminar_por [columna] [op] [valor]\n"
+            f"  Ops: == != > < >= <= isnull notnull[/{C['warning']}]\n"
+        )
+        return df_ghl
+
+    columna  = partes[1]
+    operador = partes[2]
+
+    if operador in OPERADORES_UNARIOS:
+        valor = None
+    elif len(partes) < 4:
+        console.print(f"  [{C['warning']}]El operador '{operador}' requiere un valor: /eliminar_por {columna} {operador} [valor][/{C['warning']}]\n")
+        return df_ghl
+    else:
+        raw = partes[3]
+        # Intentar parsear como número
+        try:
+            valor = float(raw) if "." in raw else int(raw)
+        except ValueError:
+            valor = raw  # dejar como string
+
+    df_filtrado, reporte = validator.eliminar_por_criterio(df_ghl, columna, operador, valor)
+
+    if reporte.get("error"):
+        console.print(f"  [{C['error']}]✗ {reporte['error']}[/{C['error']}]\n")
+        return df_ghl
+
+    n = reporte["eliminados"]
+    criterio = reporte["criterio"]
+
+    if n == 0:
+        console.print(f"  [{C['success']}]✓ Ninguna fila cumple '{criterio}' — dataset sin cambios.[/{C['success']}]\n")
+        return df_ghl
+
+    console.print(
+        f"  [{C['success']}]✓ Eliminadas:[/{C['success']}] "
+        f"[{C['accent']}]{n} filas[/{C['accent']}] donde "
+        f"[{C['primary']}]{criterio}[/{C['primary']}]"
+    )
+
+    metricas_new, _, _ = _recalcular_contexto(df_filtrado, engine, calc)
+    if metricas_new is not None:
+        console.print(f"  [{C['dim']}]Contexto actualizado — {len(df_filtrado)} filas activas.[/{C['dim']}]\n")
+
+    return df_filtrado
+
+
 # ─────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────
@@ -747,9 +979,11 @@ def main() -> None:
     config = onboarding() if necesita_onboarding() else cargar_config()
 
     df_ghl = None
-    metricas = resumen_llm = resultado = manager = None
+    metricas = resumen_llm = schema_llm = resultado = manager = validator = calc = None
     try:
-        df_ghl, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
+        df_ghl, _, metricas, resumen_llm, schema_llm, resultado, manager, validator, calc = cargar_datos(
+            config["fuente"], config.get("mock_csv", "")
+        )
     except Exception as e:
         console.print(f"\n  [{C['error']}]✗ Error cargando datos: {e}[/{C['error']}]\n")
 
@@ -759,7 +993,9 @@ def main() -> None:
         from src.ai.engine import AdlyEngine, LLMFactory
         from src.processing.metrics import CONFIG_DEFAULT
         engine = AdlyEngine(llm=LLMFactory.crear(config["llm_provider"]))
-        if resumen_llm:
+        if resumen_llm and schema_llm:
+            engine.set_contexto_completo(resumen_llm, schema_llm)
+        elif resumen_llm:
             engine.set_contexto(resumen_llm)
     except Exception as e:
         console.print(f"\n  [{C['warning']}]⚠ Engine: {e}[/{C['warning']}]")
@@ -788,46 +1024,104 @@ def main() -> None:
 
         if cmd in ("salir","exit","quit"):
             break
+
         elif cmd == "/ayuda":
             cmd_ayuda()
+
         elif cmd == "/alertas":
             cmd_alertas(manager) if manager else \
                 console.print(f"  [{C['warning']}]Sin alertas.[/{C['warning']}]\n")
+
         elif cmd == "/metricas":
             cmd_metricas(metricas, CONFIG_DEFAULT.get("col_campana","campana")) if metricas is not None else \
                 console.print(f"  [{C['warning']}]Sin métricas. Usa /refresh.[/{C['warning']}]\n")
+
         elif cmd == "/refresh":
             try:
-                df_ghl, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
-                if engine and resumen_llm:
-                    engine.set_contexto(resumen_llm)
+                df_ghl, _, metricas, resumen_llm, schema_llm, resultado, manager, validator, calc = cargar_datos(
+                    config["fuente"], config.get("mock_csv", "")
+                )
+                if engine:
+                    if schema_llm:
+                        engine.set_contexto_completo(resumen_llm, schema_llm)
+                    else:
+                        engine.set_contexto(resumen_llm)
                     engine.limpiar_memoria()
                 console.print(f"  [{C['success']}]✓ Datos actualizados.[/{C['success']}]\n")
             except Exception as e:
                 console.print(f"  [{C['error']}]✗ {e}[/{C['error']}]\n")
+
         elif cmd == "/limpiar":
             if engine: engine.limpiar_memoria()
             historial = []
             console.print(f"  [{C['success']}]✓ Conversación reiniciada.[/{C['success']}]\n")
+
         elif cmd == "/estado":
             cmd_estado(engine, config)
+
         elif cmd == "/guardar":
             cmd_guardar(historial)
+
         elif cmd == "/dashboard":
             cmd_dashboard(metricas, CONFIG_DEFAULT) if metricas is not None else \
                 console.print(f"  [{C['warning']}]Sin datos.[/{C['warning']}]\n")
+
         elif cmd.startswith("/head"):
             partes = cmd.split()
             n = int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 5
             cmd_head(df_ghl, n)
+
         elif cmd.startswith("/sample"):
             partes = cmd.split()
             n = int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 5
             cmd_sample(df_ghl, n)
+
         elif cmd == "/describe":
             cmd_describe(df_ghl)
+
         elif cmd == "/exportar":
             cmd_exportar_df(df_ghl)
+
+        # ── CLEANUP COMMANDS v2 ───────────────────────────────────────
+
+        elif cmd == "/limpiar_duplicados":
+            if validator and calc:
+                df_ghl = cmd_limpiar_duplicados(df_ghl, engine, validator, calc)
+                # Recalcular metricas locales para /metricas
+                if df_ghl is not None and calc:
+                    try:
+                        metricas = calc.calcular(df_ghl, nivel="campana")
+                    except Exception:
+                        pass
+            else:
+                console.print(f"  [{C['warning']}]Validator no disponible. Usa /refresh primero.[/{C['warning']}]\n")
+
+        elif cmd.startswith("/rellenar"):
+            if validator and calc:
+                partes = entrada.split()  # usar entrada original para preservar mayúsculas en columna
+                df_ghl = cmd_rellenar(df_ghl, engine, validator, calc, partes)
+                if df_ghl is not None and calc:
+                    try:
+                        metricas = calc.calcular(df_ghl, nivel="campana")
+                    except Exception:
+                        pass
+            else:
+                console.print(f"  [{C['warning']}]Validator no disponible. Usa /refresh primero.[/{C['warning']}]\n")
+
+        elif cmd.startswith("/eliminar_por"):
+            if validator and calc:
+                partes = entrada.split()  # usar entrada original
+                df_ghl = cmd_eliminar_por(df_ghl, engine, validator, calc, partes)
+                if df_ghl is not None and calc:
+                    try:
+                        metricas = calc.calcular(df_ghl, nivel="campana")
+                    except Exception:
+                        pass
+            else:
+                console.print(f"  [{C['warning']}]Validator no disponible. Usa /refresh primero.[/{C['warning']}]\n")
+
+        # ── CHAT (fallback) ────────────────────────────────────────────
+
         else:
             if not engine:
                 console.print(f"  [{C['error']}]✗ Engine no disponible. Verifica con /estado[/{C['error']}]\n")

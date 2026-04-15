@@ -74,8 +74,11 @@ class AlertManager:
     UMBRAL_SCORE_CRITICO         = 70.0   # score <70 = crítico
     UMBRAL_SCORE_ADVERTENCIA     = 90.0   # score <90 = advertencia
 
-    def __init__(self):
+    def __init__(self, resultado=None, metricas=None, config_cols=None):
         self.alertas: List[Alerta] = []
+        self.resultado = resultado
+        self.metricas = metricas
+        self.config_cols = config_cols or {}
 
     def evaluar(self, resultado: ResultadoValidacion) -> List[Alerta]:
         """

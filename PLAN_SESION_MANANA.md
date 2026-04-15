@@ -34,6 +34,11 @@ python interfaces/cli/cli.py
 - ✅ **Mock C dañado** — 206 registros con 15% nulos, 10% estados inválidos, 5% costos negativos, 3% fechas mal formateadas, duplicados por ID · `data/raw/mock_danado.csv` · commit `01a335d`
 - ✅ **Formato de respuestas** — system prompt prohíbe markdown en valores JSON · renderizar_respuesta() con Rich Panels coloreados por severidad · commit `744a762`
 - ✅ **Comandos de exploración** — /head [N] · /sample [N] · /describe · /exportar · Rich Tables · commit `925a3cd`
+- ✅ **Nuevos comandos CLI** — /limpiar_duplicados · /rellenar [col] [estrategia] · /eliminar_por [col] [op] [valor]
+- ✅ **Renderizador v2** — soporte para respuestas tipo tabla y lista con Rich Tables
+- ✅ **Fix AlertManager** — ahora acepta 3 parámetros (resultado, metricas, config_cols)
+- ✅ **Fix pandas deprecated** — removed infer_datetime_format en metrics.py:162
+- ⚠️ **Sin pruebas** — no existe test suite
 
 ---
 

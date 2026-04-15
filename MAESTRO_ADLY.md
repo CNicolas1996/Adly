@@ -76,9 +76,9 @@ Adly/
 | Fase 0 — Fundación | ✅ 6/6 | Completa |
 | Fase 1 — Base de datos | 🔄 5/7 | Faltan: error n8n · APScheduler · docs |
 | Fase 2 — Métricas | ✅ 4/4 | Completa |
-| Fase 3 — Motor IA | 🔄 4/5 | Falta: sanitizar inputs |
+| Fase 3 — Motor IA | ✅ 5/5 | Completa — sanitizar inputs hecho |
 | Fase 4 — Visualización | ⬜ 0/3 | Pendiente |
-| Fase 5 — Interfaces | 🔄 1/3 | CLI listo · Web y WhatsApp pendientes |
+| Fase 5 — Interfaces | 🔄 2/3 | CLI mejorado · Web y WhatsApp pendientes |
 
 ---
 

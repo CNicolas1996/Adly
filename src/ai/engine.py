@@ -29,13 +29,20 @@ logger = logging.getLogger("adly.engine")
 class RespuestaAdly:
     """
     Estructura de respuesta estandarizada de Adly.
-    Siempre retorna los mismos 4 campos — el CLI los renderiza.
+    Siempre retorna los mismos campos — el CLI los renderiza.
     Sembrado para confianza y severidad (Fase 3).
+
+    v2: agrega tipo, columnas y datos para soporte de tablas y listas.
     """
     respuesta:  str   = ""                          # Texto en lenguaje natural
     accion:     str   = ""                          # Recomendación concreta
     severidad:  str   = "info"                      # info | warning | critical
     confianza:  float = 0.0                         # 0.0 - 1.0
+
+    # v2 — campos para renderizado enriquecido
+    tipo:       str   = "texto"                     # texto | tabla | lista | debug
+    columnas:   list  = field(default_factory=list) # headers para tipo="tabla"
+    datos:      list  = field(default_factory=list) # list[dict] para tipo="tabla"
 
     @classmethod
     def desde_json(cls, texto: str) -> "RespuestaAdly":
@@ -86,12 +93,16 @@ class RespuestaAdly:
 
     @classmethod
     def _desde_dict(cls, datos: dict) -> "RespuestaAdly":
-        """Construye RespuestaAdly desde un dict ya parseado."""
+        """Construye RespuestaAdly desde un dict ya parseado. Incluye campos v2."""
         return cls(
             respuesta = datos.get("respuesta", "Sin respuesta"),
             accion    = datos.get("accion",    ""),
             severidad = datos.get("severidad", "info"),
             confianza = float(datos.get("confianza", 0.5)),
+            # v2
+            tipo      = datos.get("tipo",     "texto"),
+            columnas  = datos.get("columnas", []),
+            datos     = datos.get("datos",    []),
         )
 
     def es_valida(self) -> bool:
@@ -484,6 +495,7 @@ ALCANCE — respondes sobre:
 - Conceptos y educación de marketing digital — métricas, estrategia, pauta, embudos
 - Recomendaciones de escala, pausa o ajuste basadas en los datos disponibles
 - Estrategia de pauta para agencias pequeñas con presupuesto ajustado
+- Consultas sobre las columnas disponibles en los datos cargados
 
 FUERA DE ALCANCE — rechazas con criterio:
 Solo rechazas lo que claramente no tiene nada que ver con marketing o con el trabajo de la agencia.
@@ -519,6 +531,14 @@ Pregunta de lista ("dame un resumen", "explícame las métricas"):
 → Ordena de mayor a menor impacto para la decisión.
 → Máximo 4 puntos — si hay más, prioriza los que más afectan la decisión.
 
+Pregunta de tabla ("dame una tabla", "muéstrame comparativo en tabla"):
+→ Usa tipo="tabla", rellena "columnas" con los headers y "datos" con lista de dicts.
+→ Cada dict en "datos" debe tener exactamente las mismas claves que los valores en "columnas".
+→ Ejemplo correcto:
+   "columnas": ["Campaña", "CPL", "ROAS"],
+   "datos": [{"Campaña": "A", "CPL": "$15,000", "ROAS": "1.2"}, ...]
+→ En "respuesta" pon un texto breve de introducción a la tabla.
+
 SIEMPRE en cualquier respuesta:
 - Números concretos, no vagos. "$15,112 de CPL" no "CPL alto".
 - Si hay algo crítico que el usuario no preguntó, agrégalo al final como "Ojo:".
@@ -529,7 +549,10 @@ FORMATO — responde SIEMPRE con un JSON válido y nada más antes o después:
   "respuesta": "respuesta estructurada según el tipo de pregunta arriba",
   "accion": "acción concreta si hay algo que hacer ahora — vacío si no aplica o si primero necesitas una respuesta del usuario",
   "severidad": "info | warning | critical",
-  "confianza": 0.0-1.0
+  "confianza": 0.0-1.0,
+  "tipo": "texto | tabla | lista | debug",
+  "columnas": [],
+  "datos": []
 }
 
 Criterios de severidad:
@@ -561,10 +584,14 @@ class AdlyEngine:
     Cerebro de Adly. Orquesta LLM + Memoria + Contexto + Fallback.
     No lee datos, no calcula métricas — solo interpreta y responde.
 
-    Uso:
+    Uso básico:
         engine = AdlyEngine()
         engine.set_contexto(resumen_metricas)
         respuesta = engine.chat("¿cuál campaña tiene mejor CPL?")
+
+    Uso completo (v2):
+        engine.set_contexto_completo(resumen_metricas, resumen_schema)
+        respuesta = engine.chat("dame todas las columnas del CSV")
     """
 
     def __init__(
@@ -582,8 +609,9 @@ class AdlyEngine:
         # Memoria de conversación
         self.memoria  = MemoriaConversacion(ventana=ventana)
 
-        # Contexto de datos — se actualiza con set_contexto()
-        self._contexto_datos: str = ""
+        # Contexto de datos — se actualiza con set_contexto() o set_contexto_completo()
+        self._contexto_datos:  str = ""
+        self._contexto_schema: str = ""  # v2 — schema del CSV raw
 
         # Inicializar memoria con system prompt
         self.memoria.agregar("system", SYSTEM_PROMPT)
@@ -595,12 +623,29 @@ class AdlyEngine:
 
     def set_contexto(self, resumen_metricas: str) -> None:
         """
-        Inyecta el contexto de datos procesados.
+        Inyecta el contexto de métricas derivadas.
         Llamar cada vez que los datos se actualicen.
-        Diseñado para enchufar RAG aquí en Fase 3 sin cambiar la interfaz.
+        Backward compatible — no requiere schema.
         """
         self._contexto_datos = resumen_metricas
-        logger.debug(f"Contexto actualizado — {len(resumen_metricas)} caracteres")
+        logger.debug(f"Contexto métricas actualizado — {len(resumen_metricas)} chars")
+
+    def set_contexto_completo(self, resumen_metricas: str, resumen_schema: str) -> None:
+        """
+        v2 — Inyecta tanto métricas derivadas como schema del CSV raw.
+        Permite al LLM responder sobre columnas específicas del dataset original.
+
+        Args:
+            resumen_metricas: output de MetricsCalculator.resumen_para_llm()
+            resumen_schema:   output de MetricsCalculator.resumen_schema(df_raw)
+        """
+        self._contexto_datos  = resumen_metricas
+        self._contexto_schema = resumen_schema
+        logger.debug(
+            f"Contexto completo actualizado — "
+            f"métricas: {len(resumen_metricas)} chars, "
+            f"schema: {len(resumen_schema)} chars"
+        )
 
     def chat(self, pregunta: str) -> RespuestaAdly:
         """
@@ -649,7 +694,8 @@ class AdlyEngine:
             f"  LLM principal : {self.llm.nombre()}",
             f"  Disponible    : {self.llm.esta_disponible()}",
             f"  {self.memoria.resumen()}",
-            f"  Contexto      : {'Cargado' if self._contexto_datos else 'Vacío'}",
+            f"  Contexto métricas : {'Cargado' if self._contexto_datos else 'Vacío'}",
+            f"  Contexto schema   : {'Cargado' if self._contexto_schema else 'Vacío'}",
         ]
         return "\n".join(lineas)
 
@@ -660,6 +706,7 @@ class AdlyEngine:
         Arma el mensaje del usuario con contexto de datos inyectado.
         Detecta saludos para no inyectar métricas innecesariamente.
         Incluye fecha actual para que Adly tenga contexto temporal.
+        v2: inyecta schema si está disponible.
         Fase 3: aquí entra RAG — solo métricas relevantes por pregunta.
         """
         from datetime import date
@@ -670,17 +717,29 @@ class AdlyEngine:
         if es_saludo:
             return pregunta
 
-        fecha_hoy = date.today().strftime("%d de %B de %Y")  # ej: "06 de April de 2026"
+        fecha_hoy = date.today().strftime("%d de %B de %Y")
 
-        return (
-            f"CONTEXTO TEMPORAL: Hoy es {fecha_hoy}.\n\n"
-            f"DATOS ACTUALES DE CAMPAÑAS:\n"
-            f"{'─' * 40}\n"
-            f"{self._contexto_datos}\n"
-            f"{'─' * 40}\n\n"
-            f"PREGUNTA: {pregunta}"
-        )
+        partes = [
+            f"CONTEXTO TEMPORAL: Hoy es {fecha_hoy}.\n",
+            f"DATOS ACTUALES DE CAMPAÑAS:",
+            f"{'─' * 40}",
+            self._contexto_datos,
+            f"{'─' * 40}",
+        ]
 
+        # v2 — inyectar schema si está disponible
+        if self._contexto_schema:
+            partes += [
+                "",
+                f"SCHEMA DEL DATASET (columnas del CSV original):",
+                f"{'─' * 40}",
+                self._contexto_schema,
+                f"{'─' * 40}",
+            ]
+
+        partes.append(f"\nPREGUNTA: {pregunta}")
+
+        return "\n".join(partes)
 
     def _completar_con_fallback(self) -> Optional[str]:
         """
@@ -726,15 +785,17 @@ if __name__ == "__main__":
     calc     = MetricsCalculator(config=CONFIG_DEFAULT)
     metricas = calc.calcular(df, nivel="campana")
     resumen  = calc.resumen_para_llm(metricas, nivel="campana")
+    schema   = calc.resumen_schema(df)
 
-    # 2. Iniciar engine
+    # 2. Iniciar engine con contexto completo
     engine = AdlyEngine()
-    engine.set_contexto(resumen)
+    engine.set_contexto_completo(resumen, schema)
     print(engine.estado())
 
     # 3. Simular conversación
     preguntas = [
         "¿Cuál campaña tiene el mejor CPL?",
+        "¿Qué columnas tiene el dataset?",
         "¿Y por qué crees que esa es más eficiente?",
         "¿Qué campaña pausarías primero?",
     ]
@@ -746,8 +807,10 @@ if __name__ == "__main__":
     for pregunta in preguntas:
         print(f"\nUsuario: {pregunta}")
         respuesta = engine.chat(pregunta)
-        print(f"\nAdly [{respuesta.severidad.upper()}] (confianza: {respuesta.confianza:.0%})")
+        print(f"\nAdly [{respuesta.severidad.upper()}] (confianza: {respuesta.confianza:.0%}) tipo={respuesta.tipo}")
         print(f"  {respuesta.respuesta}")
         if respuesta.accion:
             print(f"  → {respuesta.accion}")
+        if respuesta.tipo == "tabla" and respuesta.datos:
+            print(f"  [tabla] columnas={respuesta.columnas} filas={len(respuesta.datos)}")
         print("─" * 50)

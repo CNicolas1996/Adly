@@ -125,6 +125,106 @@ class MetricsCalculator:
         lineas.append("\n" + "─" * 50)
         return "\n".join(lineas)
 
+    def resumen_schema(self, df: pd.DataFrame) -> str:
+        """
+        Retorna string con información de cada columna del DataFrame raw.
+        Se inyecta junto con resumen_para_llm() en el engine para que
+        el LLM sepa qué columnas existen más allá de las métricas derivadas.
+
+        Formato por columna:
+          - Nombre, tipo, % nulos
+          - Numérica: rango min/max + 1 ejemplo
+          - Categórica: top valores con % + 1 ejemplo
+          - Datetime: rango fechas + 1 ejemplo
+        """
+        moneda = self.config.get("moneda", "COP")
+        cols_monetarias = {
+            self.config.get("col_inversion", "costo_lead"),
+            self.config.get("col_valor",     "valor_venta"),
+        }
+
+        lineas = ["COLUMNAS DISPONIBLES:", "─" * 50]
+
+        for col in df.columns:
+            serie = df[col]
+            total = len(serie)
+            n_nulos = serie.isna().sum()
+            pct_nulos = n_nulos / total * 100 if total > 0 else 0
+
+            # Detectar tipo semántico
+            dtype = serie.dtype
+
+            # Intentar detectar datetime si es object
+            es_datetime = False
+            if dtype == object:
+                muestra = serie.dropna().head(20)
+                try:
+                    pd.to_datetime(muestra, errors="raise")
+                    es_datetime = True
+                except Exception:
+                    pass
+            elif pd.api.types.is_datetime64_any_dtype(serie):
+                es_datetime = True
+
+            nulos_str = f"{pct_nulos:.1f}% nulos" if pct_nulos > 0 else "0% nulos"
+
+            if es_datetime:
+                try:
+                    serie_dt = pd.to_datetime(serie, errors="coerce").dropna()
+                    min_f = serie_dt.min().strftime("%Y-%m-%d")
+                    max_f = serie_dt.max().strftime("%Y-%m-%d")
+                    ej    = serie_dt.sample(1).iloc[0].strftime("%Y-%m-%d") if len(serie_dt) > 0 else "—"
+                    lineas.append(f"─ {col}: datetime, {nulos_str}, rango {min_f} a {max_f}, ej: {ej}")
+                except Exception:
+                    lineas.append(f"─ {col}: datetime, {nulos_str}")
+
+            elif pd.api.types.is_numeric_dtype(dtype):
+                serie_num = serie.dropna()
+                if len(serie_num) == 0:
+                    lineas.append(f"─ {col}: numérico, {nulos_str}, sin valores")
+                    continue
+                tipo_str = "float" if dtype in [float, "float64", "float32"] else "int"
+                min_v = serie_num.min()
+                max_v = serie_num.max()
+                ej    = serie_num.sample(1).iloc[0]
+                if col in cols_monetarias:
+                    lineas.append(
+                        f"─ {col}: {tipo_str}, {nulos_str}, "
+                        f"rango ${min_v:,.2f}-${max_v:,.2f} {moneda}, "
+                        f"ej: ${ej:,.2f}"
+                    )
+                else:
+                    lineas.append(
+                        f"─ {col}: {tipo_str}, {nulos_str}, "
+                        f"rango {min_v:g}-{max_v:g}, "
+                        f"ej: {ej:g}"
+                    )
+
+            else:
+                # String / categórica
+                serie_str = serie.dropna().astype(str)
+                n_unicos  = serie_str.nunique()
+                ej        = serie_str.sample(1).iloc[0] if len(serie_str) > 0 else "—"
+
+                # Si hay pocos valores únicos → mostrar distribución
+                if n_unicos <= 8:
+                    conteos  = serie_str.value_counts(normalize=True).head(5)
+                    top_vals = ", ".join(
+                        f"{v} ({p:.0%})" for v, p in conteos.items()
+                    )
+                    lineas.append(
+                        f"─ {col}: string, {nulos_str}, "
+                        f"valores: {top_vals}, ej: {ej}"
+                    )
+                else:
+                    lineas.append(
+                        f"─ {col}: string, {nulos_str}, "
+                        f"{n_unicos} valores únicos, ej: {ej}"
+                    )
+
+        lineas.append("─" * 50)
+        return "\n".join(lineas)
+
     # ── métodos internos ──────────────────
 
     def _col(self, nivel: str) -> str:
@@ -251,6 +351,10 @@ if __name__ == "__main__":
     # Resumen para LLM
     print("\n── RESUMEN PARA LLM ──")
     print(calc.resumen_para_llm(metricas, nivel="campana"))
+
+    # Schema
+    print("\n── SCHEMA RAW ──")
+    print(calc.resumen_schema(df))
 
     # Por adset
     print("\n── POR ADSET ──")
