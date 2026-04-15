@@ -16,36 +16,56 @@ ADS      = ["Ad_Video_A", "Ad_Imagen_B", "Ad_Carrusel_C"]
 ESTADOS  = ["lead", "mql", "sql", "venta", "perdido"]
 PESOS    = [0.45, 0.25, 0.15, 0.10, 0.05]  # probabilidad de cada estado
 
+# Rango de historia por campaña — cuántos días hacia atrás tiene datos
+HISTORIA_CAMPANAS = {
+    "Campaña_Retargeting":  120,  # 4 meses
+    "Campaña_Branding":      60,  # 2 meses
+    "Campaña_Leads_Marzo":   42,  # 6 semanas
+}
+
 # ─────────────────────────────────────────
 # GENERADOR DE DATOS GHL (fuente de verdad)
 # ─────────────────────────────────────────
 
-def generar_datos_ghl(n_leads: int = 100) -> pd.DataFrame:
+def generar_datos_ghl(n_leads: int = 500) -> pd.DataFrame:
     """
     Simula los datos que viven en GoHighLevel CRM.
     Cada fila es un lead con su ID único y estado en el embudo.
+    v2: 500+ leads · fecha_creacion con distribución realista por campaña · fecha_cierre para ventas.
     """
     random.seed(42)
-    fecha_base = datetime(2026, 3, 1)
+    fecha_tope = datetime(2026, 4, 1)  # fecha más reciente del dataset
 
     registros = []
     for i in range(1, n_leads + 1):
-        dias_offset = random.randint(0, 20)
-        fecha = fecha_base + timedelta(days=dias_offset)
+        campana = random.choice(CAMPANAS)
+        historia_dias = HISTORIA_CAMPANAS.get(campana, 60)
+        dias_offset = random.randint(0, historia_dias)
+        fecha_creacion = fecha_tope - timedelta(days=dias_offset)
+
+        estado = random.choices(ESTADOS, weights=PESOS)[0]
+
+        # fecha_cierre solo si el lead llegó a venta — entre 3 y 30 días después
+        if estado == "venta":
+            fecha_cierre = fecha_creacion + timedelta(days=random.randint(3, 30))
+            fecha_cierre_str = fecha_cierre.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            fecha_cierre_str = ""
 
         registros.append({
-            "ghl_id":        f"GHL-{i:04d}",          # ID único del CRM — nunca cambia
-            "nombre":        f"Lead_{i:04d}",
-            "email":         f"lead{i}@ejemplo.com",
-            "telefono":      f"300{i:07d}",
-            "campana":       random.choice(CAMPANAS),
-            "adset":         random.choice(ADSETS),
-            "ad":            random.choice(ADS),
-            "estado":        random.choices(ESTADOS, weights=PESOS)[0],
-            "costo_lead":    round(random.uniform(8000, 25000), 2),  # COP
-            "valor_venta":   round(random.uniform(200000, 800000), 2) if random.random() > 0.85 else 0,
-            "fecha_entrada": fecha.strftime("%Y-%m-%d %H:%M:%S"),
-            "fecha_update":  (fecha + timedelta(hours=random.randint(1, 72))).strftime("%Y-%m-%d %H:%M:%S"),
+            "ghl_id":          f"GHL-{i:04d}",
+            "nombre":          f"Lead_{i:04d}",
+            "email":           f"lead{i}@ejemplo.com",
+            "telefono":        f"300{i:07d}",
+            "campana":         campana,
+            "adset":           random.choice(ADSETS),
+            "ad":              random.choice(ADS),
+            "estado":          estado,
+            "costo_lead":      round(random.uniform(8000, 25000), 2),  # COP
+            "valor_venta":     round(random.uniform(200000, 800000), 2) if estado == "venta" else 0,
+            "fecha_creacion":  fecha_creacion.strftime("%Y-%m-%d %H:%M:%S"),
+            "fecha_cierre":    fecha_cierre_str,
+            "fecha_update":    (fecha_creacion + timedelta(hours=random.randint(1, 72))).strftime("%Y-%m-%d %H:%M:%S"),
         })
 
     return pd.DataFrame(registros)
@@ -88,7 +108,7 @@ def generar_datos_sheet(df_ghl: pd.DataFrame, pct_faltantes: float = 0.12) -> pd
     df.loc[indices_estado, "estado"] = "lead"  # debería ser mql o sql
 
     # Simular timestamp de llegada al Sheet (siempre después de GHL)
-    df["sheet_timestamp"] = pd.to_datetime(df["fecha_entrada"]) + \
+    df["sheet_timestamp"] = pd.to_datetime(df["fecha_creacion"]) + \
                             pd.to_timedelta([random.randint(1, 300) for _ in range(len(df))], unit="s")
     df["sheet_timestamp"] = df["sheet_timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -107,14 +127,14 @@ def exportar_mock(output_dir: str = "data/raw") -> tuple[pd.DataFrame, pd.DataFr
     import os
     os.makedirs(output_dir, exist_ok=True)
 
-    df_ghl   = generar_datos_ghl(n_leads=100)
+    df_ghl   = generar_datos_ghl(n_leads=500)
     df_sheet = generar_datos_sheet(df_ghl)
 
     df_ghl.to_csv(f"{output_dir}/mock_ghl.csv",   index=False)
     df_sheet.to_csv(f"{output_dir}/mock_sheet.csv", index=False)
 
-    print(f"[GHL]   {len(df_ghl)} registros   → {output_dir}/mock_ghl.csv")
-    print(f"[Sheet] {len(df_sheet)} registros  → {output_dir}/mock_sheet.csv")
+    print(f"[GHL]   {len(df_ghl)} registros   -> {output_dir}/mock_ghl.csv")
+    print(f"[Sheet] {len(df_sheet)} registros  -> {output_dir}/mock_sheet.csv")
     print(f"\nErrores introducidos intencionalmente:")
     print(f"  Faltantes en Sheet : ~{int(len(df_ghl)*0.12)} registros")
     print(f"  Duplicados         : ~{max(1, int(len(df_ghl)*0.05))} registros")
