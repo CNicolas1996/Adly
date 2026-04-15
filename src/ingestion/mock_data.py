@@ -226,6 +226,94 @@ def exportar_mock_ambiguo(output_dir: str = "data/raw") -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────
+# MOCK C — datos dañados para probar validación
+# 15% nulos críticos · 10% estados inválidos · 5% costos negativos
+# 3% fechas mal formateadas · duplicados por ID
+# ─────────────────────────────────────────
+
+def generar_datos_danados(n_leads: int = 200) -> pd.DataFrame:
+    """
+    Dataset con errores graves — para verificar que DataValidator y AlertManager
+    los detectan sin explotar. Nunca usar en producción.
+
+    Errores introducidos:
+    - 15% de filas con nulos en campana, estado o costo_lead
+    - 10% de filas con estados inválidos (typos, estados inventados)
+    - 5% de filas con costo_lead negativo
+    - 3% de filas con fecha_creacion en formato incorrecto (dd/mm/yy)
+    - 3% de filas duplicadas por ghl_id
+    """
+    random.seed(55)
+    fecha_base = datetime(2026, 1, 1)
+
+    ESTADOS_INVALIDOS = ["LEAD", "MQL", "sold", "interesado", "pendiente", "", "n/a"]
+
+    registros = []
+    for i in range(1, n_leads + 1):
+        dias = random.randint(0, 90)
+        fecha = fecha_base + timedelta(days=dias)
+        registros.append({
+            "ghl_id":         f"GHL-{i:04d}",
+            "nombre":         f"Lead_{i:04d}",
+            "campana":        random.choice(CAMPANAS),
+            "adset":          random.choice(ADSETS),
+            "estado":         random.choices(ESTADOS, weights=PESOS)[0],
+            "costo_lead":     round(random.uniform(8000, 25000), 2),
+            "fecha_creacion": fecha.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    df = pd.DataFrame(registros)
+
+    # ERROR 1 — 15% nulos en campos críticos
+    for col in ["campana", "estado", "costo_lead"]:
+        idx = random.sample(list(df.index), int(len(df) * 0.15))
+        df.loc[idx, col] = None
+
+    # ERROR 2 — 10% estados inválidos
+    idx_est = random.sample(list(df.index), int(len(df) * 0.10))
+    for i in idx_est:
+        df.loc[i, "estado"] = random.choice(ESTADOS_INVALIDOS)
+
+    # ERROR 3 — 5% costos negativos
+    idx_neg = random.sample(list(df.index), int(len(df) * 0.05))
+    df.loc[idx_neg, "costo_lead"] = df.loc[idx_neg, "costo_lead"] * -1
+
+    # ERROR 4 — 3% fechas en formato incorrecto
+    idx_fecha = random.sample(list(df.index), max(1, int(len(df) * 0.03)))
+    for i in idx_fecha:
+        fecha_orig = pd.to_datetime(df.loc[i, "fecha_creacion"], errors="coerce")
+        if fecha_orig is not pd.NaT:
+            df.loc[i, "fecha_creacion"] = fecha_orig.strftime("%d/%m/%y")
+
+    # ERROR 5 — 3% duplicados por ID
+    idx_dup = random.sample(list(df.index), max(1, int(len(df) * 0.03)))
+    duplicados = df.loc[idx_dup].copy()
+    df = pd.concat([df, duplicados], ignore_index=True)
+
+    return df
+
+
+def exportar_mock_danado(output_dir: str = "data/raw") -> pd.DataFrame:
+    """Genera y guarda el dataset danado en data/raw/mock_danado.csv."""
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    df = generar_datos_danados(n_leads=200)
+    path = f"{output_dir}/mock_danado.csv"
+    df.to_csv(path, index=False)
+
+    print(f"[Danado] {len(df)} registros -> {path}")
+    print("\nErrores introducidos intencionalmente:")
+    print(f"  Nulos en campos criticos : ~15% en campana, estado, costo_lead")
+    print(f"  Estados invalidos        : ~10% con valores como 'LEAD', 'sold', 'n/a'")
+    print(f"  Costos negativos         : ~5% de registros")
+    print(f"  Fechas mal formateadas   : ~3% en formato dd/mm/yy")
+    print(f"  Duplicados por ID        : ~{max(1, int(200*0.03))} filas duplicadas")
+
+    return df
+
+
+# ─────────────────────────────────────────
 # MAIN — correr directamente para generar datos
 # ─────────────────────────────────────────
 
@@ -236,6 +324,9 @@ if __name__ == "__main__":
     if modo == "ambiguo":
         print(">> Generando mock ambiguo (para Sheets + ColumnMapper)...\n")
         exportar_mock_ambiguo()
+    elif modo == "danado":
+        print(">> Generando mock danado (para probar validacion)...\n")
+        exportar_mock_danado()
     else:
         print(">> Generando datos de prueba...\n")
         df_ghl, df_sheet = exportar_mock()
@@ -244,4 +335,5 @@ if __name__ == "__main__":
         print("\n>> Muestra Sheet (primeras 3 filas):")
         print(df_sheet.head(3).to_string())
         print("\n>> Mock data listo.")
-        print("\n>> Para generar mock ambiguo: python src/ingestion/mock_data.py ambiguo")
+        print("\n>> Para generar mock ambiguo : python src/ingestion/mock_data.py ambiguo")
+        print(">> Para generar mock danado  : python src/ingestion/mock_data.py danado")
