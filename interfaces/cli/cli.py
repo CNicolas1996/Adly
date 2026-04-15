@@ -485,15 +485,19 @@ def cmd_ayuda() -> None:
     t.add_column(style=f"bold {C['accent']}", width=16)
     t.add_column(style=C["muted"])
     for cmd, desc in [
-        ("/alertas",   "Reporte de integridad de datos"),
-        ("/metricas",  "Resumen de todas las campañas"),
-        ("/refresh",   "Recargar datos desde la fuente"),
-        ("/limpiar",   "Nueva conversación"),
-        ("/estado",    "Estado del engine y LLM"),
-        ("/guardar",   "Exportar conversación a CSV"),
-        ("/dashboard", "Generar dashboard HTML"),
-        ("/ayuda",     "Esta pantalla"),
-        ("salir",      "Cerrar Adly"),
+        ("/alertas",    "Reporte de integridad de datos"),
+        ("/metricas",   "Resumen de todas las campañas"),
+        ("/head [N]",   "Primeras N filas del dataset (default: 5)"),
+        ("/sample [N]", "N filas aleatorias (default: 5)"),
+        ("/describe",   "Estadísticas numéricas del dataset activo"),
+        ("/exportar",   "Guarda el dataset activo como CSV"),
+        ("/refresh",    "Recargar datos desde la fuente"),
+        ("/limpiar",    "Nueva conversación"),
+        ("/estado",     "Estado del engine y LLM"),
+        ("/guardar",    "Exportar conversación a CSV"),
+        ("/dashboard",  "Generar dashboard HTML"),
+        ("/ayuda",      "Esta pantalla"),
+        ("salir",       "Cerrar Adly"),
     ]:
         t.add_row(cmd, desc)
     console.print(Panel(t, title=f"[{C['accent']}] COMANDOS [/{C['accent']}]", border_style=C["accent"]))
@@ -617,6 +621,85 @@ tr:hover td{{background:#00e5ff08;}}</style></head><body>
         console.print(f"  [{C['dim']}]Ábrelo manualmente.[/{C['dim']}]\n")
 
 # ─────────────────────────────────────────
+# COMANDOS DE EXPLORACIÓN DE DATOS
+# ─────────────────────────────────────────
+
+def cmd_head(df, n: int = 5) -> None:
+    if df is None or df.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos. Usa /refresh.[/{C['warning']}]\n")
+        return
+    sub = df.head(n)
+    t = Table(box=box.SIMPLE_HEAD, border_style=C["dim"],
+              header_style=f"bold {C['primary']}", padding=(0, 1))
+    for col in sub.columns:
+        t.add_column(str(col), style=C["muted"], no_wrap=True)
+    for _, row in sub.iterrows():
+        t.add_row(*[str(v) if v is not None else "—" for v in row])
+    console.print(Panel(
+        t,
+        title=f"[{C['primary']}] HEAD — primeras {n} filas [/{C['primary']}]",
+        border_style=C["primary"],
+    ))
+    console.print()
+
+
+def cmd_sample(df, n: int = 5) -> None:
+    if df is None or df.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos. Usa /refresh.[/{C['warning']}]\n")
+        return
+    sub = df.sample(min(n, len(df)), random_state=None)
+    t = Table(box=box.SIMPLE_HEAD, border_style=C["dim"],
+              header_style=f"bold {C['accent']}", padding=(0, 1))
+    for col in sub.columns:
+        t.add_column(str(col), style=C["muted"], no_wrap=True)
+    for _, row in sub.iterrows():
+        t.add_row(*[str(v) if v is not None else "—" for v in row])
+    console.print(Panel(
+        t,
+        title=f"[{C['accent']}] SAMPLE — {n} filas aleatorias [/{C['accent']}]",
+        border_style=C["accent"],
+    ))
+    console.print()
+
+
+def cmd_describe(df) -> None:
+    if df is None or df.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos. Usa /refresh.[/{C['warning']}]\n")
+        return
+    numericas = df.select_dtypes(include="number")
+    if numericas.empty:
+        console.print(f"  [{C['warning']}]No hay columnas numéricas en el dataset activo.[/{C['warning']}]\n")
+        return
+    desc = numericas.describe().round(2)
+    t = Table(box=box.SIMPLE_HEAD, border_style=C["dim"],
+              header_style=f"bold {C['primary']}", padding=(0, 1))
+    t.add_column("STAT", style=f"bold {C['accent']}", width=8)
+    for col in desc.columns:
+        t.add_column(str(col), style=C["muted"], justify="right")
+    for idx, row in desc.iterrows():
+        t.add_row(str(idx), *[f"{v:,.2f}" for v in row])
+    console.print(Panel(
+        t,
+        title=f"[{C['primary']}] DESCRIBE — estadísticas numéricas [/{C['primary']}]",
+        border_style=C["primary"],
+    ))
+    console.print(f"  [{C['dim']}]{len(df)} filas · {len(df.columns)} columnas[/{C['dim']}]\n")
+
+
+def cmd_exportar_df(df) -> None:
+    if df is None or df.empty:
+        console.print(f"  [{C['warning']}]Sin datos activos. Usa /refresh.[/{C['warning']}]\n")
+        return
+    fn = f"adly_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    df.to_csv(fn, index=False)
+    console.print(
+        f"  [{C['success']}]Exportado:[/{C['success']}] "
+        f"[{C['primary']}]{fn}[/{C['primary']}] "
+        f"[{C['dim']}]({len(df)} filas)[/{C['dim']}]\n"
+    )
+
+
+# ─────────────────────────────────────────
 # RENDERIZAR RESPUESTA
 # ─────────────────────────────────────────
 
@@ -663,9 +746,10 @@ def main() -> None:
 
     config = onboarding() if necesita_onboarding() else cargar_config()
 
+    df_ghl = None
     metricas = resumen_llm = resultado = manager = None
     try:
-        _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
+        df_ghl, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
     except Exception as e:
         console.print(f"\n  [{C['error']}]✗ Error cargando datos: {e}[/{C['error']}]\n")
 
@@ -714,7 +798,7 @@ def main() -> None:
                 console.print(f"  [{C['warning']}]Sin métricas. Usa /refresh.[/{C['warning']}]\n")
         elif cmd == "/refresh":
             try:
-                _, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
+                df_ghl, _, metricas, resumen_llm, resultado, manager = cargar_datos(config["fuente"], config.get("mock_csv", ""))
                 if engine and resumen_llm:
                     engine.set_contexto(resumen_llm)
                     engine.limpiar_memoria()
@@ -732,6 +816,18 @@ def main() -> None:
         elif cmd == "/dashboard":
             cmd_dashboard(metricas, CONFIG_DEFAULT) if metricas is not None else \
                 console.print(f"  [{C['warning']}]Sin datos.[/{C['warning']}]\n")
+        elif cmd.startswith("/head"):
+            partes = cmd.split()
+            n = int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 5
+            cmd_head(df_ghl, n)
+        elif cmd.startswith("/sample"):
+            partes = cmd.split()
+            n = int(partes[1]) if len(partes) > 1 and partes[1].isdigit() else 5
+            cmd_sample(df_ghl, n)
+        elif cmd == "/describe":
+            cmd_describe(df_ghl)
+        elif cmd == "/exportar":
+            cmd_exportar_df(df_ghl)
         else:
             if not engine:
                 console.print(f"  [{C['error']}]✗ Engine no disponible. Verifica con /estado[/{C['error']}]\n")
