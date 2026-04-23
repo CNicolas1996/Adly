@@ -90,12 +90,44 @@ class ColumnMapper:
         return self._llm.completar(mensajes)
 
     def _construir_prompt(self, df) -> str:
-        """Arma el prompt con header + muestra de valores por columna."""
+        """
+        Arma el prompt con header + muestra de valores por columna.
+        Limpia la muestra antes de pasarla al LLM:
+          - Excluye nulos y strings vacíos
+          - Para columnas categóricas: deduplica por lowercase (evita LEAD/lead como dos valores)
+          - Excluye valores de ruido conocidos (n/a, none, null, -)
+        """
         import pandas as pd
+
+        RUIDO = {"n/a", "na", "none", "null", "-", "", "nan", "undefined"}
 
         lineas = ["COLUMNAS Y MUESTRA DE VALORES:\n"]
         for col in df.columns:
-            muestra = df[col].dropna().head(5).tolist()
+            serie = df[col].dropna()
+
+            if serie.empty:
+                lineas.append(f'  "{col}": []')
+                continue
+
+            # Columnas categóricas — limpiar ruido y deduplicar por lowercase
+            if serie.dtype == object:
+                vistos = set()
+                muestra_limpia = []
+                for v in serie:
+                    v_str = str(v).strip()
+                    v_key = v_str.lower()
+                    if v_key in RUIDO:
+                        continue
+                    if v_key not in vistos:
+                        vistos.add(v_key)
+                        muestra_limpia.append(v_str)
+                    if len(muestra_limpia) >= 6:
+                        break
+                muestra = muestra_limpia
+            else:
+                # Numéricas y fechas — muestra normal
+                muestra = serie.head(5).tolist()
+
             lineas.append(f'  "{col}": {muestra}')
 
         return "\n".join(lineas)

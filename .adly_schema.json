@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-04-22 22:37:35",
+  "n_filas": 206,
+  "n_columnas": 7,
+  "columnas": {
+    "ghl_id": "object",
+    "nombre": "object",
+    "campana": "object",
+    "adset": "object",
+    "estado": "object",
+    "costo_lead": "float64",
+    "fecha_creacion": "object"
+  }
+}

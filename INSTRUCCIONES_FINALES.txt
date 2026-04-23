@@ -1,0 +1,107 @@
+=== INSTRUCCIONES PARA NICO ===
+
+1. Abre una NUEVA SESIÓN de Claude en claude.ai
+   - No en este chat, nueva sesión limpia
+   - Selecciona Claude 3.5 Sonnet
+
+2. En la nueva sesión, copia y pega TODO lo siguiente:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Eres experto en Python + refactoring de arquitecturas LLM. Necesito mejorar 4 archivos de Adly (chatbot de análisis de campañas publicitarias).
+
+**PROBLEMA 1:** Engine solo ve métricas derivadas, no columnas raw del CSV
+- Nico pregunta "dame todas las columnas" → responde ROAS, CPL, ICL...
+- Falta: email, telefono, costo_lead, fecha_creacion, estado
+
+**PROBLEMA 2:** Sin cleanup — detecta duplicados pero no los elimina
+- 22 duplicados reportados, Nico pide eliminarlos → Adly no hace nada
+
+**PROBLEMA 3:** Tablas como CSV crudo en texto plano
+- "sme una tabla" → devuelve CSV sin formato
+- CLI solo renderiza paneles de texto, no detecta tablas
+
+**PROBLEMA 4:** COLUMNAS_CLAVE hardcodeada → explota con otros CSVs
+
+## TAREA 1: metrics.py
+
+Agregar a MetricsCalculator:
+
+def resumen_schema(self, df: pd.DataFrame) -> str:
+    """Retorna string con info de cada columna del DataFrame raw.
+    Formato: "Columna: tipo, X% nulos, min/max, ejemplos"
+    Output esperado:
+    
+    COLUMNAS DISPONIBLES:
+    ─ email: string, 0% nulos, 462 valores únicos, ej: lead1@email.com
+    ─ telefono: int, 1.2% nulos, rango 3000000001-3000000500
+    ─ costo_lead: float, 2.8% nulos, rango $8026.59-$24999.60
+    ─ estado: string, 0.4% nulos, valores: mql (73%), sql (18%), venta (4%)
+    ─ fecha_creacion: datetime, 0% nulos, rango 2026-02-13 a 2026-03-27
+    """
+
+## TAREA 2: validation.py
+
+2a. Hacer COLUMNAS_CLAVE dinámico en __init__():
+    def __init__(self, col_id: str = "ghl_id", col_estado: str = "estado", 
+                 columnas_clave: list = None):
+        self.columnas_clave = columnas_clave or ["campana", "adset", "costo_lead"]
+        
+2b. Agregar método limpiar_duplicados():
+    def limpiar_duplicados(self, df, keep="first") -> tuple[pd.DataFrame, dict]:
+        """Retorna (df_limpio, {"eliminados": N, "ejemplos_ids": [...]})"""
+
+2c. Agregar método rellenar_nulos():
+    def rellenar_nulos(self, df, columna, estrategia="media", valor_custom=None) 
+        -> tuple[pd.DataFrame, dict]:
+        """Retorna (df_rellenado, {"rellenados": N, "estrategia": ...})"""
+
+2d. Agregar método eliminar_por_criterio():
+    def eliminar_por_criterio(self, df, columna, operador, valor) 
+        -> tuple[pd.DataFrame, dict]:
+        """Retorna (df_filtrado, {"eliminados": N, "criterio": ...})"""
+
+## TAREA 3: engine.py
+
+3a. RespuestaAdly v2 — agregar campos:
+    tipo: str = "texto"  # texto|tabla|lista|debug
+    columnas: list = field(default_factory=list)
+    datos: list = field(default_factory=list)
+
+3b. AdlyEngine.set_contexto_completo(resumen_metricas, resumen_schema):
+    """Inyecta ambos en el engine"""
+
+3c. SYSTEM_PROMPT — agregar sección "COLUMNAS DISPONIBLES" con {resumen_schema}
+
+3d. RespuestaAdly._desde_dict() — parsear campos nuevos
+
+## TAREA 4: cli.py
+
+4a. renderizar_respuesta() v2 — detecta respuesta.tipo:
+    - tipo="tabla" → Rich Table con respuesta.columnas + respuesta.datos
+    - tipo="lista" → numeración limpia
+    - tipo="debug" → monospace
+    - tipo="texto" → Panel como ahora
+
+4b. Agregar comandos en main loop:
+    - /limpiar_duplicados
+    - /rellenar [columna] [estrategia]
+    - /eliminar_por [columna] [operador] [valor]
+
+ARCHIVOS ADJUNTOS ABAJO
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3. Después, sube los 4 archivos Python:
+   - engine.py (completo)
+   - validation.py (completo)
+   - metrics.py (completo)
+   - cli.py (completo)
+
+4. Dale a Sonnet: "Implementa estas 4 tareas. Entrega código listo para copiar/pegar"
+
+5. Sonnet va a generar los archivos mejorados
+   - Cópialo directo a tu repo en Windows
+   - Prueba con: python interfaces/cli/cli.py
+
+LISTO. Sonnet se encarga del refactoring quirúrgico.

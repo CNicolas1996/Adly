@@ -4,7 +4,26 @@
       "Read(//c/Users/moonw/Proyectos/claude-courses/**)",
       "Bash(npm run:*)",
       "mcp__plugin_playwright_playwright__browser_navigate",
-      "mcp__plugin_playwright_playwright__browser_take_screenshot"
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "Read(//c/Users/moonw/.claude/plugins/**)",
+      "Bash(venv/Scripts/python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git -C /c/Users/moonw/Proyectos/Adly log -5 --oneline -- src/ingestion/mock_data.py src/ingestion/sheets.py src/processing/column_mapper.py)",
+      "Bash(git:*)",
+      "Skill(update-config)",
+      "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python.exe -c \"from interfaces.cli.cli import cargar_datos; df = cargar_datos\\('mock'\\)[0]; print\\(f'✓ Cargó {len\\(df\\)} filas'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 venv/Scripts/python.exe -c \"from interfaces.cli.cli import cargar_datos; df = cargar_datos\\('mock'\\)[0]; print\\(f'✓ Cargó {len\\(df\\)} filas sin warnings'\\)\")",
+      "Bash(python -c \"from src.ai.engine import RespuestaAdly; print\\('OK - import funciona'\\)\")",
+      "Bash(notebooklm status *)",
+      "Bash(notebooklm auth *)",
+      "Bash(chcp 65001)",
+      "Bash(notebooklm create *)",
+      "Bash(notebooklm list *)"
     ]
-  }
+  },
+  "enabledPlugins": {
+    "auto-memory@claude-plugins-official": false
+  },
+  "autoMemoryEnabled": false
 }

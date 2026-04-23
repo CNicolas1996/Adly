@@ -4,6 +4,7 @@
 # MVP: Chain of Thought · JSON Output · Historial de sesión · Fallback
 
 import os
+import re
 import json
 import time
 import logging
@@ -44,6 +45,10 @@ class RespuestaAdly:
     columnas:   list  = field(default_factory=list) # headers para tipo="tabla"
     datos:      list  = field(default_factory=list) # list[dict] para tipo="tabla"
 
+    # v3 — integridad de datos (calculados por el engine, no por el LLM)
+    data_freshness:  str = ""  # "hace 5min", "hace 2h", "desconocido"
+    confidence_note: str = ""  # "mock data — no usar para decisiones reales"
+
     @classmethod
     def desde_json(cls, texto: str) -> "RespuestaAdly":
         """
@@ -54,8 +59,6 @@ class RespuestaAdly:
           3. Primer objeto JSON válido extraído con regex
           4. Fallback controlado con el texto crudo
         """
-        import re
-
         def _intentar_parsear(candidato: str) -> Optional[dict]:
             try:
                 return json.loads(candidato.strip())
@@ -107,6 +110,82 @@ class RespuestaAdly:
 
     def es_valida(self) -> bool:
         return bool(self.respuesta) and self.severidad in ("info", "warning", "critical")
+
+    def normalizar(self) -> "RespuestaAdly":
+        """
+        Normaliza la respuesta: detecta CSV en "respuesta" y lo convierte a tabla.
+        Detecta listas en "respuesta" y lo convierte a lista estructurada.
+        Esto corrige respuestas del LLM que no usan correctamente tipo/columnas/datos.
+
+        Safety net — no reemplaza el formato correcto desde el LLM, solo corrige fallbacks.
+        """
+        respuesta = self.respuesta.strip()
+        if not respuesta:
+            return self
+
+        lineas = [l for l in respuesta.split('\n') if l.strip()]
+
+        # ── Detectar CSV real (tabla) ─────────────────────────────────────────
+        # Condición: >= 2 líneas, separador consistente en TODAS las líneas
+        if len(lineas) >= 2:
+            primera = lineas[0]
+            separador = None
+            for sep in ('|', ',', ';'):
+                if sep in primera:
+                    separador = sep
+                    break
+
+            if separador:
+                # Validar que TODAS las líneas tengan el mismo número de separadores
+                conteos = [linea.count(separador) for linea in lineas]
+                es_csv_real = len(set(conteos)) == 1 and conteos[0] >= 1
+
+                if es_csv_real:
+                    columnas = [c.strip().strip('"').strip("'") for c in lineas[0].split(separador)]
+                    columnas = [c for c in columnas if c]
+
+                    if columnas:
+                        datos = []
+                        for linea in lineas[1:]:
+                            valores = [v.strip().strip('"').strip("'") for v in linea.split(separador)]
+                            while len(valores) < len(columnas):
+                                valores.append("—")
+                            fila = {columnas[i]: valores[i] for i in range(min(len(columnas), len(valores)))}
+                            datos.append(fila)
+
+                        if datos:
+                            return RespuestaAdly(
+                                respuesta = "Datos extraídos automáticamente",
+                                accion    = self.accion,
+                                severidad = self.severidad,
+                                confianza = self.confianza,
+                                tipo      = "tabla",
+                                columnas  = columnas,
+                                datos     = datos,
+                            )
+
+        # ── Detectar lista numerada o con viñetas ────────────────────────────
+        # Patrones: "1. Item" | "1) Item" | "- Item" | "* Item"
+        if re.match(r'^\d+[\.\)]\s+\w', respuesta) or re.match(r'^[-*]\s+\w', respuesta):
+            items_lista = []
+            for linea in lineas:
+                cleaned = re.sub(r'^\d+[\.\)]\s+', '', linea.strip())
+                cleaned = re.sub(r'^[-*]\s+', '', cleaned)
+                if cleaned:
+                    items_lista.append(cleaned)
+
+            if items_lista:
+                return RespuestaAdly(
+                    respuesta = "Lista detectada automáticamente",
+                    accion    = self.accion,
+                    severidad = self.severidad,
+                    confianza = self.confianza,
+                    tipo      = "lista",
+                    columnas  = [],
+                    datos     = [{"item": i} for i in items_lista],
+                )
+
+        return self
 
 
 # ─────────────────────────────────────────
@@ -526,10 +605,10 @@ Pregunta de análisis complejo ("¿qué hago con mis campañas el próximo mes?"
 → Recomendación concreta con cifras: "escala X un 20%", no "considera escalar X".
 
 Pregunta de lista ("dame un resumen", "explícame las métricas"):
-→ Formato numerado: 1. 2. 3. — nunca viñetas sueltas sin orden.
-→ Cada punto: métrica + valor actual + qué significa.
+→ Usa tipo="lista". En "datos" pon un array de objetos: [{"item": "CPL: $15k — por encima del benchmark"}, ...].
+→ En "respuesta" pon solo una frase introductoria corta.
 → Ordena de mayor a menor impacto para la decisión.
-→ Máximo 4 puntos — si hay más, prioriza los que más afectan la decisión.
+→ Máximo 4 items — prioriza los que más afectan la decisión.
 
 Pregunta de tabla ("dame una tabla", "muéstrame comparativo en tabla"):
 → Usa tipo="tabla", rellena "columnas" con los headers y "datos" con lista de dicts.
@@ -538,6 +617,13 @@ Pregunta de tabla ("dame una tabla", "muéstrame comparativo en tabla"):
    "columnas": ["Campaña", "CPL", "ROAS"],
    "datos": [{"Campaña": "A", "CPL": "$15,000", "ROAS": "1.2"}, ...]
 → En "respuesta" pon un texto breve de introducción a la tabla.
+
+CUANDO HAY UN "ÚLTIMO ANÁLISIS EJECUTADO" EN EL CONTEXTO:
+- Ese análisis es el foco principal de la conversación. El usuario está mirando ese resultado.
+- Si te piden "explícame esto", "qué significa", "qué hago", "por qué" — responde sobre ese análisis específico, no sobre el contexto general de campañas.
+- Habla como un analista que está sentado al lado: "Mira, lo que te está diciendo este RFM es..." o "El dato clave aquí es...".
+- Usa los números exactos del análisis. No los mezcles con otras métricas que no fueron parte de ese comando.
+- Si el análisis tiene implicaciones urgentes, dilo directamente: "Tienes 97 leads que se están enfriando — eso es casi la mitad. Si no hay seguimiento esta semana, los perdiste."
 
 SIEMPRE en cualquier respuesta:
 - Números concretos, no vagos. "$15,112 de CPL" no "CPL alto".
@@ -571,8 +657,9 @@ RESTRICCIONES DURAS:
 - Nunca pongas acción si no tienes claridad suficiente — mejor pregunta.
 - Responde siempre en español.
 - Devuelve SOLO el JSON. Sin texto antes, sin texto después, sin bloques markdown.
-- PROHIBIDO dentro de los valores del JSON: asteriscos (**texto** o *texto*), almohadillas (## Título), guiones como viñetas (- item), backticks (`code`). El texto en "respuesta" y "accion" debe ser prosa plana sin ningún símbolo de markdown.
-- Para listas dentro de "respuesta" usa punto y coma o numeración simple. Ejemplo correcto: "1. CPL: $15k 2. ROAS: 1.2 3. Tasa MQL: 28%". Nunca: "**CPL**: $15k\\n- ROAS: 1.2"."""
+- PROHIBIDO dentro de los valores del JSON: asteriscos (**texto** o *texto*), almohadillas (## Título), backticks (`code`).
+- El texto en "respuesta" y "accion" debe ser prosa plana sin símbolos de markdown.
+- Para listas usa siempre tipo="lista" con "datos": [{"item": "texto"}] — nunca metas listas dentro del campo "respuesta"."""
 
 
 # ─────────────────────────────────────────
@@ -613,6 +700,14 @@ class AdlyEngine:
         self._contexto_datos:  str = ""
         self._contexto_schema: str = ""  # v2 — schema del CSV raw
 
+        # v3 — integridad de datos
+        self._ingested_at: object = None  # datetime de la última carga
+        self._fuente:      str    = ""    # "mock" | "sheets" | "csv"
+
+        # v3 — contexto del último comando CLI ejecutado
+        self._ultimo_comando: str = ""   # nombre del comando: "/rfm", "/cohorts"
+        self._ultimo_resumen: str = ""   # resultado denso del último comando
+
         # Inicializar memoria con system prompt
         self.memoria.agregar("system", SYSTEM_PROMPT)
 
@@ -621,16 +716,18 @@ class AdlyEngine:
             nombres = [l.nombre() for l in self.fallback]
             logger.debug(f"Fallback: {nombres}")
 
-    def set_contexto(self, resumen_metricas: str) -> None:
+    def set_contexto(self, resumen_metricas: str, fuente: str = "desconocido") -> None:
         """
         Inyecta el contexto de métricas derivadas.
         Llamar cada vez que los datos se actualicen.
         Backward compatible — no requiere schema.
         """
         self._contexto_datos = resumen_metricas
+        self._ingested_at    = __import__("datetime").datetime.now()
+        self._fuente         = fuente
         logger.debug(f"Contexto métricas actualizado — {len(resumen_metricas)} chars")
 
-    def set_contexto_completo(self, resumen_metricas: str, resumen_schema: str) -> None:
+    def set_contexto_completo(self, resumen_metricas: str, resumen_schema: str, fuente: str = "desconocido") -> None:
         """
         v2 — Inyecta tanto métricas derivadas como schema del CSV raw.
         Permite al LLM responder sobre columnas específicas del dataset original.
@@ -638,9 +735,12 @@ class AdlyEngine:
         Args:
             resumen_metricas: output de MetricsCalculator.resumen_para_llm()
             resumen_schema:   output de MetricsCalculator.resumen_schema(df_raw)
+            fuente:           "mock" | "sheets" | "csv"
         """
         self._contexto_datos  = resumen_metricas
         self._contexto_schema = resumen_schema
+        self._ingested_at     = __import__("datetime").datetime.now()
+        self._fuente          = fuente
         logger.debug(
             f"Contexto completo actualizado — "
             f"métricas: {len(resumen_metricas)} chars, "
@@ -659,6 +759,20 @@ class AdlyEngine:
                 severidad = "warning",
                 confianza = 0.0,
             )
+
+        # Detectar saludo — responder sin llamar al LLM ni mostrar footer
+        SALUDOS = {"hola", "hi", "hello", "buenas", "buenos", "buen", "hey", "que tal", "qué tal", "gracias", "ok", "okay"}
+        es_saludo = pregunta.strip().lower() in SALUDOS or len(pregunta.strip()) < 10
+        if es_saludo:
+            mensaje_usuario = self._construir_mensaje(pregunta)
+            self.memoria.agregar("user", mensaje_usuario)
+            texto_crudo = self._completar_con_fallback()
+            if texto_crudo:
+                self.memoria.agregar("assistant", texto_crudo)
+            respuesta = RespuestaAdly.desde_json(texto_crudo or "")
+            respuesta = respuesta.normalizar()
+            # Sin footer en saludos
+            return respuesta
 
         # Construir mensaje del usuario con contexto inyectado
         mensaje_usuario = self._construir_mensaje(pregunta)
@@ -680,7 +794,27 @@ class AdlyEngine:
 
         # Parsear JSON → RespuestaAdly
         respuesta = RespuestaAdly.desde_json(texto_crudo)
+
+        # Normalizar respuesta: detecta CSV/listas en "respuesta" y convierte a tipo correcto
+        respuesta = respuesta.normalizar()
+
+        # v3 — inyectar integridad de datos calculada por el engine (no por el LLM)
+        respuesta.data_freshness  = self._calcular_freshness()
+        respuesta.confidence_note = self._calcular_confidence_note()
         return respuesta
+
+    def agregar_contexto_comando(self, comando: str, resumen: str) -> None:
+        """
+        Registra el resultado del último comando CLI ejecutado.
+        Ventana deslizante — solo el último comando es contexto activo.
+        Si el usuario corre /rfm y luego /cohorts, Adly sabe del cohorts, no del rfm.
+        Fase 3: esto se convierte en ContextoComando con datos estructurados.
+        """
+        if not resumen:
+            return
+        self._ultimo_comando = comando
+        self._ultimo_resumen = resumen
+        logger.debug(f"Último comando registrado: {comando}")
 
     def limpiar_memoria(self) -> None:
         """Reinicia la conversación — útil para nueva sesión de análisis."""
@@ -700,6 +834,58 @@ class AdlyEngine:
         return "\n".join(lineas)
 
     # ── métodos internos ──────────────────
+
+    def _calcular_freshness(self) -> str:
+        """
+        Calcula cuánto tiempo pasó desde la última carga de datos.
+        Formato: "<texto>|<nivel>"
+        Nivel: "ok" | "warning" | "critical"
+          ok       → menos de 24h
+          warning  → entre 24h y 48h — dato del día anterior
+          critical → más de 48h — no confíes sin /refresh
+        El renderer separa texto y nivel para colorear el footer.
+        """
+        if not self._ingested_at:
+            return "desconocido|ok"
+        import datetime
+        delta = datetime.datetime.now() - self._ingested_at
+        segundos = int(delta.total_seconds())
+
+        if segundos < 60:
+            texto = f"hace {segundos}s"
+        elif segundos < 3600:
+            texto = f"hace {segundos // 60}min"
+        elif segundos < 86400:
+            horas = segundos // 3600
+            texto = f"hace {horas}h"
+        else:
+            dias = segundos // 86400
+            texto = f"hace {dias}d"
+
+        # Nivel de alerta según antigüedad
+        UMBRAL_WARNING  = 24 * 3600   # 24 horas
+        UMBRAL_CRITICAL = 48 * 3600   # 48 horas
+
+        if segundos >= UMBRAL_CRITICAL:
+            nivel = "critical"
+            texto = f"{texto} — datos muy desactualizados"
+        elif segundos >= UMBRAL_WARNING:
+            nivel = "warning"
+            texto = f"{texto} — considera /refresh"
+        else:
+            nivel = "ok"
+
+        return f"{texto}|{nivel}"
+
+    def _calcular_confidence_note(self) -> str:
+        """Nota de confiabilidad basada en la fuente de datos actual."""
+        notas = {
+            "mock":       "mock data — no usar para decisiones reales",
+            "sheets":     "datos de Google Sheets",
+            "csv":        "datos de CSV local",
+            "desconocido": "fuente desconocida",
+        }
+        return notas.get(self._fuente, f"fuente: {self._fuente}")
 
     def _construir_mensaje(self, pregunta: str) -> str:
         """
@@ -735,6 +921,18 @@ class AdlyEngine:
                 f"{'─' * 40}",
                 self._contexto_schema,
                 f"{'─' * 40}",
+            ]
+
+        # v3 — inyectar último comando si existe
+        # Solo el último — ventana deslizante, no acumulación
+        if self._ultimo_resumen:
+            partes += [
+                "",
+                f"ÚLTIMO ANÁLISIS EJECUTADO ({self._ultimo_comando.upper()}):",
+                f"{'─' * 40}",
+                self._ultimo_resumen,
+                f"{'─' * 40}",
+                "El usuario puede hacer preguntas sobre este análisis.",
             ]
 
         partes.append(f"\nPREGUNTA: {pregunta}")

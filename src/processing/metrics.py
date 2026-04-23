@@ -230,9 +230,9 @@ class MetricsCalculator:
     def _col(self, nivel: str) -> str:
         """Retorna el nombre de columna según el nivel de análisis."""
         mapa = {
-            "campana": self.config.get("col_campana", "campana"),
-            "adset":   self.config.get("col_adset",   "adset"),
-            "ad":      self.config.get("col_ad",      "ad"),
+            "campana": self.config.get("col_campana") or "campana",
+            "adset":   self.config.get("col_adset") or "adset",
+            "ad":      self.config.get("col_ad") or "ad",
         }
         if nivel not in mapa:
             raise ValueError(f"Nivel inválido: '{nivel}'. Usa: campana | adset | ad")
@@ -244,8 +244,8 @@ class MetricsCalculator:
         Ej: "$520,666" → 520666.0
         """
         df = df.copy()
-        for col in [self.config["col_inversion"], self.config["col_valor"]]:
-            if col in df.columns:
+        for col in [self.config.get("col_inversion"), self.config.get("col_valor")]:
+            if col and col in df.columns:
                 df[col] = (
                     df[col]
                     .astype(str)
@@ -261,31 +261,60 @@ class MetricsCalculator:
         Agrega datos crudos por grupo.
         Cuenta leads, MQL, SQL, ventas, suma inversión e ingreso.
         """
-        col_estado   = self.config["col_estado"]
-        col_inversion = self.config["col_inversion"]
-        col_valor    = self.config["col_valor"]
-        col_id       = self.config["col_leads"]
+        col_estado   = self.config.get("col_estado")
+        col_inversion = self.config.get("col_inversion")
+        col_valor    = self.config.get("col_valor")
+        col_id       = self.config.get("col_leads")
 
-        estado_mql   = self.config["estado_mql"]
-        estado_sql   = self.config["estado_sql"]
-        estado_venta = self.config["estado_venta"]
+        estado_mql   = self.config.get("estado_mql", "mql")
+        estado_sql   = self.config.get("estado_sql", "sql")
+        estado_venta = self.config.get("estado_venta", "venta")
 
         grupos = []
-        for nombre, grupo in df.groupby(col_grupo, dropna=False):
+        n_antes = len(df)
+        
+        # Si col_grupo no existe, agrupar todo en una sola fila "Global"
+        if not col_grupo or col_grupo not in df.columns:
+            df["_global_group"] = "Global"
+            col_grupo = "_global_group"
+            
+        df = df[df[col_grupo].notna()].copy()
+        self._excluidos_sin_grupo = n_antes - len(df)
+
+        for nombre, grupo in df.groupby(col_grupo):
+            # Fallbacks seguros si col_estado es None o no existe
+            mql_count = 0
+            sql_count = 0
+            venta_count = 0
+            if col_estado and col_estado in grupo.columns:
+                mql_count = (grupo[col_estado] == estado_mql).sum()
+                sql_count = (grupo[col_estado] == estado_sql).sum()
+                venta_count = (grupo[col_estado] == estado_venta).sum()
+
+            inversion_sum = 0
+            if col_inversion and col_inversion in grupo.columns:
+                inversion_sum = grupo[col_inversion].sum()
+
+            ingreso_sum = 0
+            if col_valor and col_valor in grupo.columns:
+                ingreso_sum = grupo[col_valor].sum()
+
             grupos.append({
                 col_grupo:         nombre,
                 "total_leads":     len(grupo),
-                "total_mql":       (grupo[col_estado] == estado_mql).sum() +
-                                   (grupo[col_estado] == estado_sql).sum() +
-                                   (grupo[col_estado] == estado_venta).sum(),
-                "total_sql":       (grupo[col_estado] == estado_sql).sum() +
-                                   (grupo[col_estado] == estado_venta).sum(),
-                "total_ventas":    (grupo[col_estado] == estado_venta).sum(),
-                "total_inversion": grupo[col_inversion].sum(),
-                "total_ingreso":   grupo[col_valor].sum(),
+                "total_mql":       mql_count + sql_count + venta_count,
+                "total_sql":       sql_count + venta_count,
+                "total_ventas":    venta_count,
+                "total_inversion": inversion_sum,
+                "total_ingreso":   ingreso_sum,
             })
 
-        return pd.DataFrame(grupos)
+        # Si usamos el grupo global, renombrar para que devuelva algo con sentido
+        df_grupos = pd.DataFrame(grupos)
+        if col_grupo == "_global_group":
+            df_grupos = df_grupos.rename(columns={"_global_group": "campana"})
+            
+        return df_grupos
 
     def _calcular_metricas(self, df: pd.DataFrame) -> pd.DataFrame:
         """

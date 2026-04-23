@@ -1,0 +1,236 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Design tokens ──────────────────────────────────── */
+:root {
+  --bg:           #1a1a1a;
+  --sidebar:      #111111;
+  --card:         #1e1e1e;
+  --border:       #2a2a2a;
+  --orange:       #e8742a;
+  --orange-dark:  #c85c14;
+  --text-pri:     #eeeeee;
+  --text-sec:     #999999;
+  --text-hint:    #555555;
+  --success:      #4ade80;
+  --danger:       #f87171;
+
+  /* Typography scale */
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-md:   16px;
+  --text-lg:   20px;
+  --text-xl:   28px;
+  --text-2xl:  40px;
+
+  /* Spacing */
+  --radius:    6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+}
+
+/* ─── Global resets ──────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text-pri);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: var(--text-base);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Typography ─────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-pri);
+}
+
+p { color: var(--text-sec); }
+
+code, pre, kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar              { width: 4px; height: 4px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover  { background: var(--text-hint); }
+
+/* ─── Selection ──────────────────────────────────────── */
+::selection {
+  background: rgba(232, 116, 42, 0.3);
+  color: var(--text-pri);
+}
+
+/* ─── Focus outline ──────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* ─── Links ──────────────────────────────────────────── */
+a {
+  color: var(--orange);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+a:hover { color: var(--orange-dark); }
+
+/* ─── Utility animations ─────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+
+@keyframes float-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.03); }
+}
+
+@keyframes dot-bounce {
+  0%, 100% { transform: translateY(0);    opacity: 0.4; }
+  50%       { transform: translateY(-5px); opacity: 1;   }
+}
+
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+/* ─── Utility classes ────────────────────────────────── */
+.animate-float-up    { animation: float-up  0.35s ease-out forwards; }
+.animate-slide-in-up { animation: slide-in-up 0.3s ease-out forwards; }
+.animate-fade-in     { animation: fade-in 0.25s ease-out forwards; }
+.animate-breathe     { animation: breathe 4s ease-in-out infinite; }
+
+/* Typing indicator dots */
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-hint);
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Skeleton loader */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--card) 25%,
+    var(--border) 50%,
+    var(--card) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius);
+}
+
+/* Green pulse dot (online indicator) */
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Orange glow on hover for interactive elements */
+.hover-glow:hover {
+  box-shadow: 0 0 0 1px var(--orange), 0 0 12px rgba(232, 116, 42, 0.15);
+}
+
+/* Card base */
+.card-base {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.card-base:hover {
+  border-color: #3a3a3a;
+}
+
+/* ─── Thin divider ───────────────────────────────────── */
+.divider {
+  height: 1px;
+  background: var(--border);
+}
+
+/* ─── Halo global Adly ───────────────────────────────── */
+@keyframes halo-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%       { opacity: 0.8;  transform: scale(1.08); }
+}
+
+.adly-bg {
+  position: relative;
+  background: #000;
+  min-height: 100vh;
+}
+
+.adly-bg::before {
+  content: '';
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(ellipse at center,
+    rgba(232, 116, 42, 0.18) 0%,
+    rgba(232, 116, 42, 0.07) 40%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+  animation: halo-breathe 5s ease-in-out infinite;
+}
+
+.adly-bg > * {
+  position: relative;
+  z-index: 1;
+}
