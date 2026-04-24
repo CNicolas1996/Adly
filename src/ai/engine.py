@@ -391,16 +391,38 @@ class GroqLLM(OpenAILLM):
         self.base_url = os.getenv("ADLY_LLM_BASE_URL", "https://api.groq.com/openai/v1")
 
     def completar(self, mensajes: list[dict]) -> str:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-            resp   = client.chat.completions.create(
-                model    = self.modelo,
-                messages = mensajes,
-            )
-            return resp.choices[0].message.content
-        except Exception as e:
-            raise RuntimeError(f"[GroqLLM] Error: {e}")
+        """
+        Retry con backoff exponencial para rate limit de Groq.
+        Intenta hasta 3 veces antes de lanzar RuntimeError.
+        """
+        from openai import OpenAI
+        client  = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        intentos = 3
+        espera   = 5  # duplica en cada retry: 5s → 10s → 20s
+
+        for intento in range(intentos):
+            try:
+                resp = client.chat.completions.create(
+                    model    = self.modelo,
+                    messages = mensajes,
+                )
+                return resp.choices[0].message.content
+
+            except Exception as e:
+                error_str = str(e).lower()
+                es_rate_limit = any(k in error_str for k in [
+                    "rate limit", "rate_limit", "429", "too many requests",
+                    "tokens per minute", "requests per minute",
+                ])
+                if es_rate_limit and intento < intentos - 1:
+                    logger.debug(
+                        f"[GroqLLM] Rate limit — esperando {espera}s "
+                        f"(intento {intento + 1}/{intentos})"
+                    )
+                    time.sleep(espera)
+                    espera *= 2
+                else:
+                    raise RuntimeError(f"[GroqLLM] Error: {e}")
 
     def nombre(self) -> str: return "GroqLLM"
 
@@ -760,19 +782,18 @@ class AdlyEngine:
                 confianza = 0.0,
             )
 
-        # Detectar saludo — responder sin llamar al LLM ni mostrar footer
-        SALUDOS = {"hola", "hi", "hello", "buenas", "buenos", "buen", "hey", "que tal", "qué tal", "gracias", "ok", "okay"}
+        # Detectar saludo — respuesta hardcodeada, sin LLM, sin footer
+        SALUDOS = {"hola", "hi", "hello", "buenas", "buenos", "buen", "hey",
+                   "que tal", "qué tal", "gracias", "ok", "okay", "listo", "dale"}
         es_saludo = pregunta.strip().lower() in SALUDOS or len(pregunta.strip()) < 10
         if es_saludo:
-            mensaje_usuario = self._construir_mensaje(pregunta)
-            self.memoria.agregar("user", mensaje_usuario)
-            texto_crudo = self._completar_con_fallback()
-            if texto_crudo:
-                self.memoria.agregar("assistant", texto_crudo)
-            respuesta = RespuestaAdly.desde_json(texto_crudo or "")
-            respuesta = respuesta.normalizar()
-            # Sin footer en saludos
-            return respuesta
+            return RespuestaAdly(
+                respuesta = "Listo. ¿Qué quieres analizar?",
+                accion    = "",
+                severidad = "info",
+                confianza = 1.0,
+                tipo      = "texto",
+            )
 
         # Construir mensaje del usuario con contexto inyectado
         mensaje_usuario = self._construir_mensaje(pregunta)
@@ -959,8 +980,15 @@ class AdlyEngine:
                 logger.debug(f"Respondio {llm.nombre()}")
                 return texto
             except RuntimeError as e:
-                logger.debug(f"{llm.nombre()} fallo: {e}")
-                time.sleep(0.5)
+                error_str = str(e).lower()
+                es_rate_limit = any(k in error_str for k in [
+                    "rate limit", "rate_limit", "429", "too many requests",
+                ])
+                if es_rate_limit:
+                    logger.warning(f"{llm.nombre()} rate limit agotado — pasando al siguiente")
+                else:
+                    logger.debug(f"{llm.nombre()} fallo: {e}")
+                time.sleep(1)
 
         return None  # todos fallaron
 

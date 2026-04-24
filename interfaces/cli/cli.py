@@ -424,6 +424,14 @@ def main() -> None:
             else:
                 console.print(f"  [{C['warning']}]Validator no disponible. Usa /refresh primero.[/{C['warning']}]\n")
 
+        # ── Comando desconocido — no cae al chat ──────────────
+        elif cmd.startswith("/"):
+            console.print(
+                f"  [{C['warning']}]{ICON['warn']} "
+                f"Comando '{cmd}' no reconocido. "
+                f"Escribe /ayuda para ver los disponibles.[/{C['warning']}]\n"
+            )
+
         # ── Chat (fallback) ────────────────────────────────────
         else:
             if not engine:
@@ -444,6 +452,13 @@ def main() -> None:
                 f"  [{C['primary']}]Analizando...[/{C['primary']}]",
                 spinner="arc",
             ):
+                # ── Interceptor pandas — antes del LLM ──────────
+                if df_ghl is not None:
+                    from src.processing.query_engine import ejecutar_query_analitica
+                    resultado_pandas = ejecutar_query_analitica(entrada, df_ghl)
+                    if resultado_pandas:
+                        engine.agregar_contexto_comando("query_analitica", resultado_pandas)
+                # ────────────────────────────────────────────────
                 respuesta = engine.chat(entrada)
 
             console.print(

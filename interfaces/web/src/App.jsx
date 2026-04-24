@@ -136,7 +136,7 @@ function DesktopSidebar({ onClose }) {
   return (
     <div style={{
       width: SIDEBAR_W, height: '100%',
-      background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)',
+      background: 'rgba(4,4,4,0.45)', backdropFilter: 'blur(24px) saturate(1.6)', WebkitBackdropFilter: 'blur(24px) saturate(1.6)',
       borderRight: '1px solid rgba(232,116,42,0.1)',
       display: 'flex', flexDirection: 'column',
     }}>
@@ -188,7 +188,7 @@ function MobileSidebar({ isOpen, onClose }) {
             initial={{ x: -SIDEBAR_W }} animate={{ x: 0 }} exit={{ x: -SIDEBAR_W }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             className="md:hidden"
-            style={{ position: 'fixed', left: 0, top: 0, bottom: 0, width: SIDEBAR_W, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)', borderRight: '1px solid rgba(232,116,42,0.12)', zIndex: 50, display: 'flex', flexDirection: 'column' }}
+            style={{ position: 'fixed', left: 0, top: 0, bottom: 0, width: SIDEBAR_W, background: 'rgba(4,4,4,0.45)', backdropFilter: 'blur(24px) saturate(1.6)', WebkitBackdropFilter: 'blur(24px) saturate(1.6)', borderRight: '1px solid rgba(232,116,42,0.12)', zIndex: 50, display: 'flex', flexDirection: 'column' }}
           >
             <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(232,116,42,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
