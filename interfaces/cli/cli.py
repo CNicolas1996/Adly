@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+load_dotenv()
 
 # Root del proyecto = dos niveles arriba de interfaces/cli/cli.py
 _ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,7 @@ from interfaces.cli.commands import (
 )
 from interfaces.cli.onboarding import (
     boot_screen, onboarding, cargar_config, necesita_onboarding,
-    limpiar_pantalla, mostrar_logo,
+    limpiar_pantalla, mostrar_logo, reconfigurar,
 )
 
 ENV_PATH = Path(".env")
@@ -102,7 +103,9 @@ def cargar_datos(fuente: str, mock_csv: str = ""):
             resultado   = validator.validar(df_ghl, df_sheet)
             calc        = MetricsCalculator(config=config_cols)
             metricas    = calc.calcular(df_ghl, nivel="campana")
-            resumen_llm = calc.resumen_para_llm(metricas, nivel="campana")
+            # resumen_ejecutivo_llm → contexto comprimido para el LLM (~375 tokens)
+            # resumen_para_llm     → texto completo para comandos CLI (/metricas, etc.)
+            resumen_llm = calc.resumen_ejecutivo_llm(df_ghl)
             schema_llm  = calc.resumen_schema(df_ghl)
             manager     = AlertManager(resultado, metricas, config_cols)
 
@@ -363,6 +366,23 @@ def main() -> None:
 
         elif cmd == "/velocidad":
             cmd_velocidad(df_ghl)
+
+        # ── Comando /config — reconfigurar sin reiniciar ──────
+        elif cmd == "/config":
+            config = reconfigurar(config, engine=engine)
+            try:
+                df_ghl, _, metricas, resumen_llm, schema_llm, resultado, manager, validator, calc, reporte_carga = cargar_datos(
+                    config["fuente"], config.get("mock_csv", "")
+                )
+                if engine:
+                    if schema_llm:
+                        engine.set_contexto_completo(resumen_llm, schema_llm, fuente=config["fuente"])
+                    else:
+                        engine.set_contexto(resumen_llm, fuente=config["fuente"])
+                    engine.limpiar_memoria()
+                console.print(f"  [{C['success']}]{ICON['ok']} Datos recargados con nueva configuración.[/{C['success']}]\n")
+            except Exception as e:
+                console.print(f"  [{C['warning']}]{ICON['warn']} Config guardada. Usa /refresh para recargar datos: {e}[/{C['warning']}]\n")
 
         # ── Comandos refresh y limpieza ────────────────────────
         elif cmd == "/refresh":
