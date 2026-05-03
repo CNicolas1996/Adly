@@ -35,6 +35,26 @@ ESTADO_KEYWORDS_DIRECTOS = {
     "pendiente": "lead", "pendientes": "lead",
 }
 
+# Stopwords conversacionales — saludos y frases que NO deben disparar fuzzy match
+STOPWORDS_CONVERSACIONALES = {
+    "hola", "buenos", "buenas", "buen", "hi", "hello", "hey", "que tal",
+    "qué tal", "gracias", "ok", "okay", "listo", "dale", "por favor",
+    "disculpa", "perdona", "sabes", "sabés", "tienes", "tenés",
+}
+
+# Sinónimos semánticos — mapeo para columnas comunes
+SINONIMOS_COLUMNA = {
+    "revenue": "revenue", "ingresos": "revenue", "ganancias": "revenue",
+    "costo": "costo_lead", "coste": "costo_lead", "gasto": "costo_lead",
+    "pais": "country", "país": "country", "paises": "country", "países": "country",
+    "campaña": "utm_campaign", "campana": "utm_campaign", "campaign": "utm_campaign",
+    "ad": "utm_ad", "anuncio": "utm_ad",
+    "adset": "utm_adset", "conjunto": "utm_adset",
+    "estado": "estado", "status": "estado", "etapa": "estado",
+    "lead": "lead", "leads": "lead",
+    "fecha": "fecha", "date": "fecha",
+}
+
 STOPWORDS_ANALITICAS = {
     # Acciones
     "cuantos", "cuantas", "cuanto", "cuanta", "total", "suma", "promedio",
@@ -51,6 +71,8 @@ STOPWORDS_ANALITICAS = {
     "mes", "semana", "año", "trimestre", "hoy", "ayer",
     # Artículos y preposiciones
     "que", "los", "las", "del", "una", "uno", "este", "esta",
+    # Partes de nombres de columnas compuestas — NUNCA deben matchear contra valores
+    "stage", "funnel", "utm", "campaign", "adset",
 }
 
 # ─────────────────────────────────────────
@@ -129,6 +151,14 @@ def _detectar_todo(palabras: list, df: pd.DataFrame, schema: dict) -> dict:
         if len(palabra) <= 3:
             continue
 
+        # Skip stopwords conversacionales — saludos no deben matching
+        if palabra.lower() in STOPWORDS_CONVERSACIONALES:
+            continue
+
+        # Resolver sinónimos semánticos antes del fuzzy match
+        palabra_original = palabra
+        palabra = SINONIMOS_COLUMNA.get(palabra.lower(), palabra)
+
         # Pre-match directo de estados — sin fuzzy, sin stopwords
         # "leads", "ventas", "sold" → detectados aquí antes de cualquier otra cosa
         if palabra in ESTADO_KEYWORDS_DIRECTOS and not res["val_estado"]:
@@ -151,6 +181,9 @@ def _detectar_todo(palabras: list, df: pd.DataFrame, schema: dict) -> dict:
                 res["col_agrupacion"] = col_real
                 if score < 95:
                     res["interpretaciones"].append(f"INTERPRETACIÓN: '{palabra}' → columna '{col_real}' ({score}%)")
+                continue
+            # Columna matcheó fuerte (score >= 80) pero ya estaban ocupadas — no buscar en valores
+            if score >= 80:
                 continue
         # Match de valor en columnas categóricas — nunca matchear stopwords analíticas
         if palabra in STOPWORDS_ANALITICAS:
@@ -184,7 +217,11 @@ def _detectar_intent(p: str):
     PATRONES = {
         "suma": ["cuánto gastamos", "cuanto gastamos", "total gasto", "suma de",
                  "cuánto se gastó", "cuanto se gasto", "gasto total", "total de",
-                 "cuánto cuesta", "cuanto cuesta", "sumar", "suma total"],
+                 "cuánto cuesta", "cuanto cuesta", "sumar", "suma total",
+                 "sumatoria", "sumatoria de", "suma total de", "suma por",
+                 "total por", "cuanto suma", "cuánto suma", "sumame", "súmame",
+                 "calcula", "calcular", "calcula el", "dame el total",
+                 "dame la suma", "cuánto es", "cuanto es"],
         "promedio": ["promedio", "media", "average", "avg", "en promedio", "de media"],
         "ranking": ["mejor", "peor", "top", "mayor", "menor", "más eficiente", "mas eficiente",
                     "más rentable", "mas rentable", "más convierte", "mas convierte",
@@ -322,13 +359,27 @@ def _advertencias_calidad(df: pd.DataFrame, col: str, interpretaciones: list = N
 # CAPA 3 — ENGINE PRINCIPAL
 # ─────────────────────────────────────────
 
-def ejecutar_query_analitica(pregunta: str, df: pd.DataFrame):
+# Patrones de preguntas sobre schema — no deben ir al fuzzy matcher
+_SCHEMA_PATTERNS = [
+    "lista de columnas", "las columnas", "columnas del", "columnas de la",
+    "que columnas", "qué columnas", "cuales columnas", "cuáles columnas",
+    "que campos", "qué campos", "los campos", "lista de campos",
+    "estructura del", "estructura de la", "schema", "esquema",
+    "que tiene el dataset", "qué tiene el dataset",
+]
+
+def ejecutar_query_analitica(pregunta: str, df: pd.DataFrame, confirmado: bool = False):
     """
     Detecta intent analítico y ejecuta pandas contra el df real.
     Retorna string para inyectar al LLM, o None si no hay intent claro.
     """
     p = _normalizar(pregunta)
     palabras = p.split()
+
+    # Preguntas sobre schema — no entrar al fuzzy, dejar que el LLM responda
+    # con el schema que ya tiene en contexto
+    if any(pat in p for pat in _SCHEMA_PATTERNS):
+        return None
 
     intent = _detectar_intent(p)
     if intent is None:
@@ -402,9 +453,21 @@ def ejecutar_query_analitica(pregunta: str, df: pd.DataFrame):
 
     # ── RANKING ───────────────────────────────────────────────
     if intent == "ranking" and col_agr:
-        if col_est:
+        if col_est and val_est:
+            # Cruce col_agr × val_estado — "adset con más perdidos", "campaña con más ventas"
+            filtrado = df_f[df_f[col_est] == val_est]
+            totales  = df_f.groupby(col_agr).size().reset_index(name="total")
+            conteo   = filtrado.groupby(col_agr).size().reset_index(name=val_est)
+            ranking  = totales.merge(conteo, on=col_agr, how="left").fillna(0)
+            ranking[val_est] = ranking[val_est].astype(int)
+            ranking["tasa_%"] = (ranking[val_est] / ranking["total"] * 100).round(1)
+            res.append(f"RESULTADO EXACTO (pandas) — ranking '{val_est}' por '{col_agr}'{pt}:")
+            res.append(ranking.sort_values(val_est, ascending=False).to_string(index=False))
+            res.append("NOTA ANALÍTICA: Volumen y tasa son métricas distintas. Tasa alta con volumen bajo puede ser estadísticamente engañoso.")
+        elif col_est:
+            # Estado detectado pero sin valor específico — ranking con desglose completo
             mv = _match_valor("venta", col_est, df_f, umbral=70)
-            val_v = val_est or (mv[0] if mv else None)
+            val_v = mv[0] if mv else None
             if val_v:
                 ventas = df_f[df_f[col_est] == val_v].groupby(col_agr).size().reset_index(name="ventas")
                 totales = df_f.groupby(col_agr).size().reset_index(name="total")

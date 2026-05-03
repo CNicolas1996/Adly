@@ -84,6 +84,15 @@ class RespuestaAdly:
             if datos:
                 return cls._desde_dict(datos)
 
+        # Estrategia 2.5 — extraer substring entre primer { y último }
+        inicio = texto.find("{")
+        fin    = texto.rfind("}")
+        if inicio != -1 and fin != -1 and fin > inicio:
+            candidato = texto[inicio:fin+1]
+            datos = _intentar_parsear(candidato)
+            if datos:
+                return cls._desde_dict(datos)
+
         # Estrategia 3 — extraer primer objeto JSON válido del texto libre
         # Busca desde el primer { hasta el } que cierre correctamente
         match_obj = re.search(r"\{.*\}", texto, re.DOTALL)
@@ -131,6 +140,40 @@ class RespuestaAdly:
             return self
 
         lineas = [l for l in respuesta.split('\n') if l.strip()]
+
+        # ── Detectar tabla markdown (| col | col |) ──────────────────────────
+        # Patrón: línea con |...| seguida de línea con |---|...| (separador)
+        if len(lineas) >= 2:
+            es_tabla_md = all('|' in l for l in lineas[:3])  # primeras 3 líneas tienen |
+            tiene_separador = any(re.match(r'^\|\s*-{3,}\s*\|', l) for l in lineas)
+
+            if es_tabla_md and tiene_separador:
+                # Extraer headers de la primera línea
+                header_line = lineas[0].strip().strip('|')
+                headers_md = [c.strip() for c in header_line.split('|') if c.strip()]
+
+                if headers_md:
+                    datos_md = []
+                    for linea in lineas[1:]:
+                        # Saltar línea de separador |---|---|
+                        if re.match(r'^\|\s*-{3,}\s*\|', linea):
+                            continue
+                        contenido = linea.strip().strip('|')
+                        valores = [v.strip() for v in contenido.split('|') if v.strip()]
+                        if len(valores) >= len(headers_md):
+                            fila = {headers_md[i]: valores[i] for i in range(len(headers_md))}
+                            datos_md.append(fila)
+
+                    if datos_md:
+                        return RespuestaAdly(
+                            respuesta = "Datos extraídos automáticamente",
+                            accion    = self.accion,
+                            severidad = self.severidad,
+                            confianza = self.confianza,
+                            tipo      = "tabla",
+                            columnas  = headers_md,
+                            datos     = datos_md,
+                        )
 
         # ── Detectar CSV real (tabla) ─────────────────────────────────────────
         # Condición: >= 2 líneas, separador consistente en TODAS las líneas
@@ -315,9 +358,9 @@ class GeminiLLM(BaseLLM):
     """
 
     def __init__(self, modelo: str = None):
-        self.modelo  = modelo or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.modelo  = modelo or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         # Lee ADLY_LLM_API_KEY (variable unificada) con fallback a GEMINI_API_KEY (legacy)
-        self.api_key = _env("ADLY_LLM_API_KEY") or _env("GEMINI_API_KEY")
+        self.api_key = _env("GEMINI_API_KEY") or _env("ADLY_LLM_API_KEY")
 
     def completar(self, mensajes: list[dict]) -> str:
         try:
@@ -596,6 +639,7 @@ TIPOS DE RESPUESTA:
 - Lista → tipo="lista", "datos":[{"item":"..."}], máx 4 items, orden por impacto.
 - Tabla → tipo="tabla", "columnas":["A","B"], "datos":[{"A":"x","B":"y"}].
 - Si hay ÚLTIMO ANÁLISIS EJECUTADO en el contexto: responde sobre ese, usa sus números exactos.
+- Si el contexto contiene "CONFIRMAR" (pregunta de verificación de fuzzy match), IGNORA esa parte y responde directamente sobre los datosanalíticos del ÚLTIMO ANÁLISIS.
 
 SIEMPRE: números concretos ("$15,112" no "CPL alto"). Agrega "Ojo:" si hay algo crítico no preguntado.
 
@@ -948,7 +992,7 @@ class AdlyEngine:
                 texto = llm.completar(self.memoria.como_lista())
                 logger.debug(f"Respondio {llm.nombre()}")
                 return texto
-            except RuntimeError as e:
+            except Exception as e:
                 error_str = str(e).lower()
                 es_rate_limit = any(k in error_str for k in [
                     "rate limit", "rate_limit", "429", "too many requests",
@@ -956,7 +1000,7 @@ class AdlyEngine:
                 if es_rate_limit:
                     logger.warning(f"{llm.nombre()} rate limit agotado — pasando al siguiente")
                 else:
-                    logger.debug(f"{llm.nombre()} fallo: {e}")
+                    logger.warning(f"{llm.nombre()} fallo: {e}")
                 time.sleep(1)
 
         return None  # todos fallaron

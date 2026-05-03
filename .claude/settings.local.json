@@ -19,7 +19,9 @@
       "Bash(notebooklm auth *)",
       "Bash(chcp 65001)",
       "Bash(notebooklm create *)",
-      "Bash(notebooklm list *)"
+      "Bash(notebooklm list *)",
+      "Bash(.venv/Scripts/python *)",
+      "Bash(.venv/Scripts/python.exe *)"
     ]
   },
   "enabledPlugins": {

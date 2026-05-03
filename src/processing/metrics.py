@@ -225,6 +225,103 @@ class MetricsCalculator:
         lineas.append("─" * 50)
         return "\n".join(lineas)
 
+
+    def resumen_ejecutivo_llm(self, df_raw: pd.DataFrame) -> str:
+        """
+        Resumen ejecutivo comprimido para el LLM — máximo ~1500 chars / ~375 tokens.
+
+        A diferencia de resumen_para_llm() que genera una fila por grupo
+        (puede ser cientos con datos sucios), este método calcula directamente
+        desde el df raw con pandas y retorna solo lo que el LLM necesita para
+        responder preguntas de marketing.
+
+        Reemplaza resumen_para_llm() como contexto del system prompt.
+        resumen_para_llm() sigue disponible para uso interno y comandos CLI.
+
+        Fase 3 (Queryn/RAG): este método se convierte en el índice del RAG —
+        cada sección se vectoriza por separado para recuperación selectiva.
+        """
+        moneda = self.config.get("moneda", "COP")
+        col_camp   = self.config.get("col_campana",  "campana")
+        col_estado = self.config.get("col_estado",   "estado")
+        col_inver  = self.config.get("col_inversion","costo_lead")
+        col_valor  = self.config.get("col_valor",    "valor_venta")
+
+        lineas = [f"RESUMEN EJECUTIVO ({moneda}) — {len(df_raw)} registros totales"]
+        lineas.append("─" * 50)
+
+        # ── Embudo global ──────────────────────────────────────
+        if col_estado in df_raw.columns:
+            estados = df_raw[col_estado].dropna().str.lower().str.strip()
+            # Normalizar variantes sucias
+            NORM = {"lead": "lead", "leads": "lead", "mql": "mql",
+                    "sql": "sql", "venta": "venta", "ventas": "venta",
+                    "sold": "venta", "perdido": "perdido", "perdidos": "perdido"}
+            estados_norm = estados.map(lambda x: NORM.get(x, x))
+            conteo = estados_norm.value_counts()
+            n_nulos = df_raw[col_estado].isna().sum()
+            lineas.append(f"EMBUDO GLOBAL:")
+            for est in ["lead", "mql", "sql", "venta", "perdido"]:
+                n = conteo.get(est, 0)
+                if n > 0:
+                    lineas.append(f"  {est.upper()}: {n}")
+            otros = {k: v for k, v in conteo.items()
+                     if k not in ["lead","mql","sql","venta","perdido"]}
+            if otros:
+                lineas.append(f"  Otros/sucios: {sum(otros.values())} ({list(otros.keys())})")
+            if n_nulos > 0:
+                lineas.append(f"  Sin estado: {n_nulos}")
+            total_leads = conteo.get("lead", 0)
+            total_ventas = conteo.get("venta", 0)
+            if total_leads > 0:
+                lineas.append(f"  Tasa conversión global: {total_ventas/total_leads:.1%}")
+
+        # ── Por campaña ───────────────────────────────────────
+        if col_camp in df_raw.columns and col_estado in df_raw.columns:
+            lineas.append(f"POR CAMPAÑA:")
+            campanas = df_raw[col_camp].dropna().unique()
+            for camp in campanas[:5]:  # máx 5 campañas
+                sub = df_raw[df_raw[col_camp] == camp]
+                n_total = len(sub)
+                if col_estado in sub.columns:
+                    estados_sub = sub[col_estado].dropna().str.lower().str.strip()
+                    estados_sub = estados_sub.map(lambda x: NORM.get(x, x))
+                    n_leads  = (estados_sub == "lead").sum()
+                    n_ventas = (estados_sub == "venta").sum()
+                    tasa = f"{n_ventas/n_total:.1%}" if n_total > 0 else "0%"
+                    lineas.append(f"  {camp}: {n_total} reg | leads:{n_leads} ventas:{n_ventas} tasa:{tasa}")
+                else:
+                    lineas.append(f"  {camp}: {n_total} registros")
+            n_sin_camp = df_raw[col_camp].isna().sum()
+            if n_sin_camp > 0:
+                lineas.append(f"  Sin campaña: {n_sin_camp} registros")
+
+        # ── Costo ─────────────────────────────────────────────
+        if col_inver in df_raw.columns:
+            serie = df_raw[col_inver].dropna()
+            n_neg = (serie < 0).sum()
+            lineas.append(f"COSTO ({col_inver}):")
+            lineas.append(f"  Total: ${serie[serie >= 0].sum():,.0f} | Promedio: ${serie[serie >= 0].mean():,.0f}")
+            if n_neg > 0:
+                lineas.append(f"  ALERTA: {n_neg} valores negativos — excluidos del cálculo")
+
+        # ── Fechas ────────────────────────────────────────────
+        col_fecha = None
+        for c in df_raw.columns:
+            if "fecha" in c.lower() or "date" in c.lower():
+                col_fecha = c
+                break
+        if col_fecha:
+            try:
+                fechas = pd.to_datetime(df_raw[col_fecha], errors="coerce").dropna()
+                lineas.append(f"PERÍODO: {fechas.min().strftime('%Y-%m-%d')} a {fechas.max().strftime('%Y-%m-%d')}")
+            except Exception:
+                pass
+
+        lineas.append("─" * 50)
+        resultado = "\n".join(lineas)
+        return resultado
+
     # ── métodos internos ──────────────────
 
     def _col(self, nivel: str) -> str:

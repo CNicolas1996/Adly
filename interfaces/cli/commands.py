@@ -121,6 +121,12 @@ AYUDA_CMDS = {
         ["/eliminar_por campana isnull",
          "/eliminar_por costo_lead < 0",
          "/eliminar_por estado == venta"]),
+    "config":           ("/config",                         "Cambiar configuración",
+        "Edita nombre, proveedor LLM, modelo, API Key o fuente de datos sin reiniciar.\n"
+        "  Muestra la config actual y permite cambiar solo lo que necesitas.\n"
+        "  Escribe 'todo' para ejecutar el onboarding completo desde cero.\n"
+        "  Los cambios se guardan en .env y se aplican inmediatamente.",
+        ["/config"]),
     "refresh":          ("/refresh",                        "Recargar datos",
         "Recarga el dataset desde la fuente configurada y actualiza el engine.",
         []),
@@ -144,7 +150,7 @@ GRUPOS = {
     "Limpieza":     ["limpiar_duplicados", "rellenar", "eliminar_por"],
     "Campañas":     ["alertas", "metricas", "dashboard"],
     "Modelos":      ["cohorts", "rentabilidad", "rfm", "embudo", "velocidad"],
-    "Sistema":      ["refresh", "limpiar", "estado", "guardar", "exportar"],
+    "Sistema":      ["config", "refresh", "limpiar", "estado", "guardar", "exportar"],
 }
 
 
@@ -942,7 +948,10 @@ def _estados_venta(df, col_estado: str) -> list:
     if not col_estado:
         return []
     vals = df[col_estado].dropna().unique()
-    patrones_venta = {"venta", "sale", "won", "cerrado", "closed", "converted", "vendido"}
+    patrones_venta = {
+        "venta", "sale", "won", "cerrado", "closed", "converted", "vendido",
+        "closed_won", "conversion",  # valores GHL comunes
+    }
     return [v for v in vals if str(v).lower() in patrones_venta]
 
 
@@ -1180,6 +1189,19 @@ def cmd_rentabilidad(df) -> None:
         f"ROI = (LTV-CAC)/CAC"
         f"[/{C['dim']}]\n"
     )
+
+    # Contexto para el engine (Web UI)
+    resumen = []
+    for campana, grupo in df2.groupby(col_campana):
+        ventas = grupo["_es_venta"].sum()
+        if ventas == 0:
+            continue
+        cac = grupo[col_costo].sum() / ventas
+        ltv = grupo[col_valor][grupo["_es_venta"]].mean()
+        roi = (ltv - cac) / cac * 100 if cac > 0 else 0
+        verdict = "rentable" if roi >= 100 else "ajustado" if roi >= 0 else "pérdida"
+        resumen.append(f"{campana}: CAC ${cac:,.0f}, LTV ${ltv:,.0f}, ROI {roi:+.0f}% ({verdict})")
+    return ("Rentabilidad por campaña:\n" + "\n".join(resumen)) if resumen else "Sin ventas registradas para calcular rentabilidad."
 
 
 # ── /rfm ─────────────────────────────────────────────────────────────────────
@@ -1531,3 +1553,13 @@ def cmd_velocidad(df) -> None:
         f"[{C['success']}]verde = más rápido que promedio[/{C['success']}] · "
         f"[{C['error']}]rojo = más lento[/{C['error']}][/{C['dim']}]\n"
     )
+
+    # Contexto para el engine (Web UI)
+    resumen_vel = []
+    for camp, grp in (df_ventas.groupby(col_camp) if col_camp else [("(todas)", df_ventas)]):
+        avg = grp["_dias"].mean()
+        med = grp["_dias"].median()
+        diff = avg - global_avg
+        vs = f"{diff:+.0f}d vs global"
+        resumen_vel.append(f"{camp}: {avg:.0f}d prom, {med:.0f}d mediana ({vs})")
+    return f"Velocidad lead→venta. Global: {global_avg:.0f} días.\n" + "\n".join(resumen_vel)

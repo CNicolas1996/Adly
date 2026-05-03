@@ -15,7 +15,10 @@ app = FastAPI(title="Adly API", version="1.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware
+# SlowAPI primero en código = último en ejecución
+app.add_middleware(SlowAPIMiddleware)
+
+# CORS después en código = primero en ejecución (intercepta preflight)
 cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 origins = [origin.strip() for origin in cors_origins_str.split(",")]
 
@@ -26,9 +29,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# SlowAPI Middleware
-app.add_middleware(SlowAPIMiddleware)
 
 # Include routers
 app.include_router(config.router)

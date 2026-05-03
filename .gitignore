@@ -1,4 +1,5 @@
 # === SEGURIDAD — NUNCA SUBIR ===
+.worktrees/
 .env
 credentials.json
 service_account.json

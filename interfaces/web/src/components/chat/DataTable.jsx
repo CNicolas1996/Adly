@@ -11,9 +11,9 @@ export default function DataTable({ table }) {
     <div style={{
       marginTop:    10,
       borderRadius: 6,
-      border:       '1px solid #2a2a2a',
-      overflow:     'hidden',
-      maxHeight:    280,
+      border:        '1px solid #2a2a2a',
+      overflowX:     'auto',
+      maxHeight:     table ? 'min(900px, 95%)' : 'min(680px, 90%)',
       overflowY:    'auto',
     }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>

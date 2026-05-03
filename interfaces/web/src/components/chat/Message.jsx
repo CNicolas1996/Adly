@@ -3,6 +3,14 @@ import { motion } from 'framer-motion'
 import DataTable from './DataTable'
 import ConfidenceBar from './ConfidenceBar'
 
+// ── Detectores de tipo de contenido ──────────────────────────────────────────
+
+const isRichTable   = t => /[┌┐└┘│─┼╔╗╚╝║═]/.test(t)
+const isMarkdown    = t => /^#{1,3} |^\- |\*\*|`[^`]|^\|.+\|/m.test(t)
+const hasNewlines   = t => t.includes('\n')
+
+// ── Tiempo ────────────────────────────────────────────────────────────────────
+
 function formatTime(ts) {
   if (!ts) return ''
   try {
@@ -10,30 +18,216 @@ function formatTime(ts) {
   } catch { return '' }
 }
 
-// Very basic markdown: **bold** and `code`
-function renderMarkdown(text) {
+// ── Renderer Rich ASCII (tablas de terminal) ──────────────────────────────────
+// Renderiza el output de Rich como bloque monospace con scroll horizontal
+
+function RichOutput({ text }) {
+  return (
+    <pre style={{
+      fontFamily:  'JetBrains Mono, Fira Code, Consolas, monospace',
+      fontSize:    12,
+      lineHeight:  1.55,
+      color:       '#d4d4d4',
+      background:  '#0d0d0d',
+      border:      '1px solid #1e1e1e',
+      borderRadius: 6,
+      padding:     '10px 14px',
+      overflowX:   'auto',
+      whiteSpace:  'pre',
+      margin:      '4px 0 0',
+      maxWidth:    '100%',
+    }}>
+      {text}
+    </pre>
+  )
+}
+
+// ── Renderer Markdown ─────────────────────────────────────────────────────────
+
+function renderInline(text) {
   if (!text) return null
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
   return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
+    if (part.startsWith('**') && part.endsWith('**'))
       return <strong key={i} style={{ color: '#eeeeee', fontWeight: 600 }}>{part.slice(2, -2)}</strong>
-    }
-    if (part.startsWith('`') && part.endsWith('`')) {
+    if (part.startsWith('`') && part.endsWith('`'))
       return (
         <code key={i} style={{
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize:   11,
-          background: '#111',
-          border:     '1px solid #2a2a2a',
+          fontFamily:   'JetBrains Mono, monospace',
+          fontSize:     11,
+          background:   '#111',
+          border:       '1px solid #2a2a2a',
           borderRadius: 3,
-          padding:    '1px 5px',
-          color:      '#e8742a',
+          padding:      '1px 5px',
+          color:        '#e8742a',
         }}>{part.slice(1, -1)}</code>
       )
-    }
     return <span key={i}>{part}</span>
   })
 }
+
+function MarkdownTable({ rows }) {
+  if (rows.length < 2) return null
+  const headers = rows[0].split('|').map(h => h.trim()).filter(Boolean)
+  const body    = rows.slice(2).map(r => r.split('|').map(c => c.trim()).filter(Boolean))
+
+  return (
+    <div style={{ overflowX: 'auto', marginTop: 8 }}>
+      <table style={{
+        width:          '100%',
+        borderCollapse: 'collapse',
+        fontSize:       12,
+        fontFamily:     'JetBrains Mono, monospace',
+      }}>
+        <thead>
+          <tr>
+            {headers.map((h, i) => (
+              <th key={i} style={{
+                padding:     '6px 10px',
+                textAlign:   'left',
+                color:       '#e8742a',
+                borderBottom:'1px solid #2a2a2a',
+                fontWeight:  600,
+                whiteSpace:  'nowrap',
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((row, ri) => (
+            <tr key={ri} style={{ borderBottom: '1px solid #1a1a1a' }}>
+              {row.map((cell, ci) => (
+                <td key={ci} style={{
+                  padding:   '5px 10px',
+                  color:     '#cccccc',
+                  whiteSpace:'nowrap',
+                }}>{renderInline(cell)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function MarkdownRenderer({ text }) {
+  const lines  = text.split('\n')
+  const output = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // Tabla markdown
+    if (line.startsWith('|') && i + 1 < lines.length && lines[i + 1].includes('---')) {
+      const tableRows = []
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableRows.push(lines[i])
+        i++
+      }
+      output.push(<MarkdownTable key={`tbl-${i}`} rows={tableRows} />)
+      continue
+    }
+
+    // Encabezado
+    if (/^#{1,3} /.test(line)) {
+      const level = line.match(/^#+/)[0].length
+      const text  = line.replace(/^#+\s/, '')
+      const sizes = { 1: 16, 2: 14, 3: 13 }
+      output.push(
+        <div key={i} style={{
+          fontSize:     sizes[level] || 14,
+          fontWeight:   600,
+          color:        '#e8742a',
+          marginTop:    level === 1 ? 0 : 10,
+          marginBottom: 4,
+          fontFamily:   'Inter, sans-serif',
+          letterSpacing: '-0.01em',
+        }}>
+          {text}
+        </div>
+      )
+      i++
+      continue
+    }
+
+    // Lista con guión
+    if (/^[-•] /.test(line)) {
+      const items = []
+      while (i < lines.length && /^[-•] /.test(lines[i])) {
+        items.push(lines[i].replace(/^[-•] /, ''))
+        i++
+      }
+      output.push(
+        <ul key={`ul-${i}`} style={{
+          margin:     '4px 0',
+          paddingLeft: 16,
+          listStyle:  'none',
+        }}>
+          {items.map((item, j) => (
+            <li key={j} style={{
+              display:     'flex',
+              alignItems:  'flex-start',
+              gap:         8,
+              color:       '#cccccc',
+              fontSize:    14,
+              lineHeight:  1.6,
+              marginBottom: 2,
+            }}>
+              <span style={{ color: '#e8742a', flexShrink: 0, marginTop: 1 }}>◆</span>
+              <span>{renderInline(item)}</span>
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    // Línea vacía
+    if (!line.trim()) {
+      output.push(<div key={i} style={{ height: 6 }} />)
+      i++
+      continue
+    }
+
+    // Texto normal
+    output.push(
+      <p key={i} style={{
+        margin:     '2px 0',
+        color:      '#cccccc',
+        fontSize:   14,
+        lineHeight: 1.65,
+      }}>
+        {renderInline(line)}
+      </p>
+    )
+    i++
+  }
+
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>{output}</div>
+}
+
+// ── Renderer unificado ────────────────────────────────────────────────────────
+
+function ContentRenderer({ text }) {
+  if (!text) return null
+
+  // Tablas ASCII de Rich — monospace con scroll
+  if (isRichTable(text)) return <RichOutput text={text} />
+
+  // Markdown — renderer estructurado
+  if (isMarkdown(text) || hasNewlines(text)) return <MarkdownRenderer text={text} />
+
+  // Texto plano con inline markdown
+  return (
+    <p style={{ margin: 0, color: '#cccccc', fontSize: 14, lineHeight: 1.65 }}>
+      {renderInline(text)}
+    </p>
+  )
+}
+
+// ── Avatar ────────────────────────────────────────────────────────────────────
 
 function CatPaw({ size = 18, color = '#e8742a' }) {
   return (
@@ -51,41 +245,27 @@ function CatPaw({ size = 18, color = '#e8742a' }) {
 
 function BotAvatar() {
   const [imgError, setImgError] = useState(false)
-
   if (imgError) {
     return (
       <div style={{
-        width: 32,
-        height: 32,
-        borderRadius: '50%',
+        width: 32, height: 32, borderRadius: '50%',
         background: 'rgba(232,116,42,0.1)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <CatPaw size={18} color="#e8742a" />
       </div>
     )
   }
-
   return (
     <div style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <img
-        src="/seals/idle.svg"
-        width={26}
-        height={26}
-        alt="Adly"
-        style={{ display: 'block' }}
-        onError={() => setImgError(true)}
-      />
+      <img src="/seals/idle.svg" width={26} height={26} alt="Adly"
+        style={{ display: 'block' }} onError={() => setImgError(true)} />
     </div>
   )
 }
 
-/**
- * Single chat message bubble.
- * role: 'user' | 'bot'
- */
+// ── Message ───────────────────────────────────────────────────────────────────
+
 export default function Message({ role, content, confidence, table, timestamp, confidence_note, data_freshness }) {
   const isBot = role === 'bot'
 
@@ -111,23 +291,25 @@ export default function Message({ role, content, confidence, table, timestamp, c
       )}
 
       {/* Bubble */}
-      <div style={{ maxWidth: 'min(560px, 82%)', minWidth: 60 }}>
+      <div style={{ maxWidth: isBot ? (table ? 'min(900px, 95%)' : 'min(680px, 90%)') : 'min(480px, 82%)', minWidth: 60 }}>
         <div style={{
-          background:   isBot ? '#1e1e1e' : 'rgba(232,116,42,0.12)',
-          border:       `1px solid ${isBot ? '#2a2a2a' : 'rgba(232,116,42,0.25)'}`,
+          background:   isBot ? '#0f0f0f' : 'rgba(232,116,42,0.08)',
+          border:       `1px solid ${isBot ? '#1e1e1e' : 'rgba(232,116,42,0.2)'}`,
           borderRadius: isBot ? '2px 10px 10px 10px' : '10px 2px 10px 10px',
-          padding:      '10px 14px',
-          fontSize:     14,
-          lineHeight:   1.65,
-          color:        '#cccccc',
-          fontFamily:   'Inter, sans-serif',
+          padding:      isBot ? '10px 14px' : '10px 14px',
         }}>
-          {renderMarkdown(content)}
+          {/* Contenido */}
+          {isBot
+            ? <ContentRenderer text={content} />
+            : <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: '#dddddd', fontFamily: 'Inter, sans-serif' }}>
+                {content}
+              </p>
+          }
 
-          {/* Data table (bot only) */}
+          {/* Tabla estructurada (del backend via prop table) */}
           {isBot && table && <DataTable table={table} />}
 
-          {/* Confidence bar (bot only, only if confidence present) */}
+          {/* Barra de confianza */}
           {isBot && confidence != null && confidence > 0 && (
             <ConfidenceBar confidence={confidence} note={confidence_note} />
           )}
@@ -135,12 +317,12 @@ export default function Message({ role, content, confidence, table, timestamp, c
 
         {/* Meta row */}
         <div style={{
-          display:       'flex',
-          alignItems:    'center',
-          gap:           8,
-          marginTop:     4,
-          paddingLeft:   isBot ? 2 : 0,
-          paddingRight:  isBot ? 0 : 2,
+          display:        'flex',
+          alignItems:     'center',
+          gap:            8,
+          marginTop:      4,
+          paddingLeft:    isBot ? 2 : 0,
+          paddingRight:   isBot ? 0 : 2,
           justifyContent: isBot ? 'flex-start' : 'flex-end',
         }}>
           <span style={{ fontSize: 10, color: '#444444', fontFamily: 'Inter, sans-serif' }}>
