@@ -812,6 +812,16 @@ class AdlyEngine:
         self._ultimo_resumen = resumen
         logger.debug(f"Último comando registrado: {comando}")
 
+    def limpiar_contexto_comando(self) -> None:
+        """
+        Limpia el último resultado de comando/pandas.
+        Llamar cuando la pregunta actual es nueva y no tiene resultado propio,
+        para evitar que el LLM interprete datos de una pregunta anterior.
+        """
+        self._ultimo_comando = ""
+        self._ultimo_resumen = ""
+        logger.debug("Contexto de último comando limpiado")
+
     def limpiar_memoria(self) -> None:
         """Reinicia la conversación — útil para nueva sesión de análisis."""
         self.memoria.limpiar()
@@ -828,6 +838,34 @@ class AdlyEngine:
             f"  Contexto schema   : {'Cargado' if self._contexto_schema else 'Vacío'}",
         ]
         return "\n".join(lineas)
+
+    def cambiar_llm(self, proveedor: str) -> str:
+        """
+        Cambia el LLM activo en runtime sin reiniciar el engine.
+        proveedor: groq | gemini | openai | deepseek | qwen | ollama
+        La memoria y el contexto de datos se mantienen.
+        """
+        MAPA = {
+            "groq":     lambda: GroqLLM(),
+            "gemini":   lambda: GeminiLLM(),
+            "ollama":   lambda: OllamaLLM(),
+            "openai":   lambda: OpenAILLM(),
+            "deepseek": lambda: OpenAILLM(
+                modelo   = os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                api_key  = _env("DEEPSEEK_API_KEY"),
+                base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            ),
+            "qwen": lambda: OpenAILLM(
+                modelo   = os.getenv("QWEN_MODEL", "qwen-turbo"),
+                api_key  = _env("QWEN_API_KEY"),
+                base_url = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            ),
+        }
+        if proveedor not in MAPA:
+            return f"Proveedor desconocido: {proveedor}"
+        self.llm = MAPA[proveedor]()
+        logger.debug(f"LLM cambiado a {proveedor} → {self.llm.nombre()}")
+        return self.llm.nombre()
 
     def recargar_llm(self) -> str:
         """

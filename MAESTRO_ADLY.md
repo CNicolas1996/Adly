@@ -1,6 +1,6 @@
 # MAESTRO ADLY
 > Pegar junto con CLAUDE.md cuando la sesión sea sobre Adly
-> Última actualización: 2026-05-02
+> Última actualización: 2026-05-07
 
 ---
 
@@ -95,7 +95,7 @@ CAPA 4 — ENGINE ADLY
   engine.py · metrics.py · validation.py · Reconciliador Meta↔GHL
         ↓
 CAPA 5 — LLM + RESPUESTA
-  Groq + Llama 3.3 70b (principal) · Gemini Flash (fallback) · Ollama (local)
+  Groq + Llama 3.3 70b (principal) · Gemini 2.5 Flash (fallback) · Ollama (local)
         ↓
 CAPA 6 — INTERFAZ
   CLI v5 (✅) · Web UI React (✅ conectada) · API REST FastAPI (✅ MVP)
@@ -119,26 +119,26 @@ Adly/
 │   │   ├── column_mapper.py    ✅
 │   │   ├── value_mapper.py     ✅
 │   │   ├── validation.py       ✅
-│   │   ├── alerts.py           ✅
+│   │   ├── alerts.py           ✅ fix 2026-05-07 — DataValidator + AlertManager correctos
 │   │   ├── metrics.py          ✅ resumen_ejecutivo_llm() comprimido
 │   │   ├── schema_watcher.py   ✅
-│   │   ├── query_engine.py     ✅ v2 cruce adset×estado resuelto
+│   │   ├── query_engine.py     ✅ v3 Text-to-Pandas — planner Gemini + sandbox exec()
 │   │   └── reconciler.py       ⬜ PENDIENTE FASE 2
 │   └── ai/
-│       └── engine.py           ✅ v4 + _env() helper + hot-reload LLM + system prompt -74% tokens
+│       └── engine.py           ✅ v4 + cambiar_llm() + limpiar_contexto_comando()
 │   └── api/
 │       ├── main.py             ✅
-│       ├── state.py            ✅
+│       ├── state.py            ✅ pending_model + modelo_activo
 │       ├── limiter.py          ✅
 │       └── routes/
 │           ├── analyses.py     ✅
-│           ├── chat.py         ✅ manejo CONFIRMAR sin LLM
+│           ├── chat.py         ✅ fix cache bug 2026-05-07 + /alertas arreglado
 │           └── config.py       ✅
 ├── interfaces/
 │   ├── cli/
 │   │   ├── theme.py            ✅
 │   │   ├── renderer.py         ✅
-│   │   ├── commands.py         ✅ todos los comandos probados
+│   │   ├── commands.py         ✅
 │   │   ├── onboarding.py       ✅
 │   │   └── cli.py              ✅
 │   └── web/                    ✅ CONECTADA AL ENGINE REAL
@@ -147,61 +147,156 @@ Adly/
 │   ├── mock_ghl.csv            ✅ 500 leads
 │   ├── mock_sheet.csv          ✅
 │   ├── mock_ambiguo.csv        ✅ 300 leads
-│   └── mock_danado.csv         ✅ 206 leads
+│   ├── mock_danado.csv         ✅ 206 leads
+│   └── cami_real.csv           ⚠️ NUEVO — datos reales de Camí, NO subir a GitHub
 ├── requirements.txt            ⚠️ agregar rapidfuzz>=3.0.0
 └── .env                        ✅ sin comillas, rutas relativas
 ```
 
 ---
 
-## Estado actual — 2026-05-02
+## Estado actual — 2026-05-07
 
-### ✅ Completado en sesión 2026-05-02
+### ✅ Completado en sesión 2026-05-07
 
 | Archivo | Cambio |
 |---|---|
-| `query_engine.py` | Fix cruce adset×estado — executor ranking separado en 2 casos: con val_est (filtra + cruza) y sin val_est (fallback venta) |
-| `commands.py` | Tests completos contra mock_danado.csv — todos los comandos pendientes funcionando |
-| `interfaces/web/.env.local` | `VITE_MOCK=false` — Web UI conectada al backend real |
-| `requirements.txt` | `groq==0.4.2` + `httpx==0.27.0` — fix incompatibilidad proxies |
+| `src/ai/engine.py` | `limpiar_contexto_comando()` — nuevo método. Limpia `_ultimo_resumen` entre preguntas para evitar contaminación de contexto |
+| `src/api/routes/chat.py` | **Fix bug cache** — detecta si pregunta es seguimiento (`_REFS_PREVIAS`) o nueva. Si es nueva sin resultado pandas → limpia contexto anterior |
+| `src/api/routes/chat.py` | **Fix `/alertas`** — reescrito con `DataValidator` de `validation.py` + `AlertManager` de `alerts.py`. Auto-detecta columnas. En Fase 1 corre con un solo df |
+| `DataTable.jsx` | ✅ Scroll horizontal funcionando |
 
-### Tests de comandos — estado actual (mock_danado.csv)
+### Tests de comandos Web UI — mock_ghl.csv (2026-05-07)
 
 | Comando | Estado |
 |---|---|
 | `/columnas` | ✅ |
 | `/nulos` | ✅ |
 | `/describe` | ✅ |
-| `/head` | ✅ |
-| `/sample` | ✅ |
-| `/alertas` | ✅ |
+| `/head [N]` | ✅ |
+| `/sample [N]` | ✅ |
+| `/alertas` | ✅ fix 2026-05-07 — Score 100% con mock |
 | `/metricas` | ✅ |
 | `/embudo` | ✅ |
-| `/config` + hot-reload | ✅ |
-| `/outliers` | ✅ 8 outliers en costo_lead |
-| `/correlacion` | ✅ aviso correcto (1 col numérica) |
-| `/limpiar_duplicados` | ✅ 6 duplicados → 200 filas |
-| `/cohorts` | ✅ 4 cohortes, conversión ene→mar creciente |
-| `/rfm` | ✅ usa costo_lead como proxy Monetary |
-| `/rentabilidad` | ✅ aviso correcto (sin valor_venta) |
-| `/velocidad` | ✅ aviso correcto (sin fecha_cierre) |
-| Chat básico Web UI | ✅ engine real respondiendo |
+| `/cohorts` | ✅ |
+| `/rfm` | ✅ |
+| `/rentabilidad` | ✅ |
+| `/velocidad` | ✅ |
+| `/outliers` | ✅ |
+| `/correlacion` | ✅ |
+| `/unicos` | ✅ |
+| `/rango` | ✅ |
+| `/top` | ✅ |
+| `/estado` | ✅ |
+| `/modelo` | ✅ |
 
-### ⚠️ Problemas conocidos — roadmap
+### Preguntas libres — estado tras fix cache (2026-05-07)
 
-- [ ] **"ranking de campañas con perdidos"** — "de X por Y" no tokeniza bien col_agr. Se resuelve en v2 intent por LLM
-- [ ] **Pregunta de seguimiento sin contexto** — "¿de qué campañas son?" después de un resultado falla
-- [ ] **Intent por LLM** — reemplazar keywords de `_detectar_intent()`. En roadmap post 30 días Camí
+| Pregunta | Estado |
+|---|---|
+| "cuál campaña tiene mejor conversión" | ✅ |
+| "cuál campaña me cuesta más conseguir un cliente" | ✅ |
+| "cuál anuncio me trae más plata" | ✅ |
+| "qué adset tiene peor rendimiento" | ✅ |
+| "ordéname las campañas de mejor a peor" | ✅ |
+| "qué está fallando" | ✅ |
+| "dónde meto más presupuesto" | ✅ |
+| "qué pasa si le bajo el presupuesto a esa" | ✅ fix cache — ya no agarra resultado anterior |
+| "qué está quemando presupuesto sin resultado" | ✅ |
+| "qué campaña me tiene más enamorado y no debería" | ✅ análisis semántico correcto |
+| "cómo me fue en febrero vs marzo" | ✅ |
+| "compara el costo por lead entre adsets" | ✅ |
+| "cuál anuncio convierte mejor en retargeting" | ⚠️ responde pero sin filtrar por campaña — confianza 70% automática |
+| "si le bajo presupuesto a la peor campaña" | ✅ fix cache — responde sobre Branding correctamente |
 
-### 🔄 Pendientes inmediatos
+### 🔄 Pendientes próxima sesión
 
-- [ ] **Chat sin dataset** — modo conversacional donde Adly responde sin CSV/Sheet cargado y guía al usuario a conectar su fuente. **Próxima sesión**
+- [ ] **Remover prints de debug** — `query_engine.py` y `chat.py` antes de cualquier demo
+- [ ] **Probar 3 mocks restantes** — `mock_sheet`, `mock_ambiguo`, `mock_danado` con preguntas complejas
+- [ ] **CSV real de Camí** — cargar `cami_real.csv` y probar engine agnóstico con datos feos (ver notas abajo)
+- [ ] **`docs/errores_y_soluciones.md`** — documentar sesiones 2026-05-06 y 2026-05-07
+
+### 🔄 Pendientes post-demo
+
+- [ ] **Chat sin dataset** — onboarding conversacional
 - [ ] **requirements.txt** — agregar `rapidfuzz>=3.0.0`
-- [ ] **GitHub** — subir repo privado
-- [ ] **Conectar Sheet real de Camí** — pendiente por disponibilidad de Camí
-- [ ] **docs/errores_y_soluciones.md** — documentar bugs resueltos
+- [ ] **GitHub** — subir repo privado (⚠️ nunca incluir `cami_real.csv`)
+- [ ] **Refactoring MetricsCalculator** — detección semántica vs CONFIG_DEFAULT hardcodeado
 - [ ] **Layout recostado izquierda** — `#root` sin `margin: auto`
 - [ ] **AdlyFloat** — imágenes con fondo transparente
+
+### 🔬 Investigación BITACORA — no abrir antes de tener datos reales estables
+
+- [ ] **Meta API — bots baneados** — investigar ingesta directa robusta sin triggear bans. Alimenta `meta_ingestor.py` Fase 2
+- [ ] **Modelado y normalización** — estudiar 1FN/2FN/3FN y aplicar al CSV de Camí. La atribución doble viola 1FN, debería ser tabla separada. Prepara migración Sheets→Postgres Fase 3
+- [ ] **Parser de atribución múltiple** — celda `"AI_AUTOMATION_FUNNEL | WhatsApp Leads | Reel IA"` son 3 atribuciones. Detectar separadores ` | `, `,`, `;`. Explotar antes de que el planner vea el df. Candidato: `attribution_parser.py` o extensión de `value_mapper.py`
+
+---
+
+## CSV real de Camí — notas para próxima sesión
+
+**Archivo:** `data/raw/cami_real.csv`
+**⚠️ NO subir a GitHub — datos reales de clientes**
+
+**Schema detectado:**
+- `Fecha de creacion` · `Nombre` · `correo` · `telefono`
+- `ad primera atribucion` · `ad segunda atribucion`
+- `stage` · `ad set primera atribucion` · `ad set segunda atribucion`
+
+**Problemas identificados a atacar:**
+- Emails rotos — `m@ría jesús753@hotmail.com` — caracteres especiales en usuario
+- Duplicado real — Hilda Pomares aparece dos veces, una con `stage = Duplicate`
+- Teléfonos sin prefijo internacional — `5316545371` vs `+18690534518`
+- Stages en inglés mezclados — `Warm Lead`, `No Show`, `Appointment Set`, `Lead`, `Duplicate`, `Closed Lost` → `value_mapper.py` debe mapearlos
+- `NONE` como string en columna ad — no es null real
+- Atribución doble en columnas separadas — el engine debe entender ambas
+- Atribución múltiple en una celda — `"AI_AUTOMATION_FUNNEL | WhatsApp Leads | Reel IA"`
+
+**Qué probar:**
+1. `value_mapper.py` — ¿mapea los stages correctamente?
+2. `schema_watcher.py` — detecta schema completamente diferente al mock
+3. Planner — columnas con espacios y tildes en nombres
+4. `/alertas` — debe mostrar duplicados reales
+
+---
+
+## Query Engine v3 — Text-to-Pandas
+
+### Arquitectura (2026-05-06)
+
+```
+pregunta
+    ↓
+CAPA 1 — Schema Reader (dinámico — lee el df real)
+    ↓
+CAPA 2 — Planner LLM (Gemini 2.5 Flash)
+  recibe: schema real + pregunta
+  genera: código pandas que asigna result = ...
+    ↓
+CAPA 3 — Sandbox exec() restringido
+  namespace: {df, pd, builtins limitados}
+  timeout: 5s
+    ↓
+CAPA 4 — Validador
+  verifica: result no es None/vacío/todo NaN
+    ↓
+CAPA 5 — Re-prompt (máx 2 intentos)
+  si falla: le pasa el error al planner para corregir
+    ↓
+RESULTADO serializado → LLM principal lo formatea
+```
+
+**Ventaja clave:** funciona con cualquier schema de cliente — no hay columnas hardcodeadas. Juanito con columnas raras funciona igual que Paco con columnas simples.
+
+### /modelo — comando de cambio de LLM
+
+```
+/modelo              → tabla de modelos disponibles con estado de API key
+/modelo gemini       → cambia a Gemini (si tiene key → cambia directo)
+/modelo openai       → pide API key si no existe → la guarda en .env con máscara ****
+```
+
+**Modelos soportados:** groq · gemini · openai · deepseek · qwen · ollama
 
 ---
 
@@ -219,7 +314,7 @@ npm run dev
 ```
 
 **Verificar antes de levantar:**
-- `.env` en raíz tiene `GROQ_API_KEY` sin comillas
+- `.env` en raíz tiene `GROQ_API_KEY` y `GEMINI_API_KEY` sin comillas
 - `interfaces/web/.env.local` tiene `VITE_MOCK=false`
 - venv activo con `groq==0.4.2` y `httpx==0.27.0`
 
@@ -229,37 +324,14 @@ npm run dev
 
 | Componente | Tokens aprox |
 |---|---|
-| System prompt base | ~431 (era ~1,670) |
+| System prompt base | ~431 |
 | resumen_ejecutivo_llm() | ~375 |
 | schema_llm | ~180 |
 | Último resultado pandas | ~200 |
 | Pregunta del usuario | ~20 |
 | **Total por request** | **~1,206** |
 
-Antes: ~2,445 tokens. Ahora: ~1,206. **Preguntas por minuto Groq free: ~8 (era ~4).**
-
----
-
-## Query Engine — estado y roadmap
-
-### v2 — cruce adset×estado ✅
-
-**Resuelto en sesión 2026-05-02:**
-- Executor ranking separado en 2 casos: `col_est + val_est` → filtra df por estado antes de agrupar, muestra volumen + tasa. `col_est` sin `val_est` → fallback a venta.
-- Funciona: "adset con más perdidos", "campaña con más ventas", "top adset por leads"
-- Falla aún: "ranking de campañas con perdidos" (tokenización de "de X")
-
-**Limitaciones conocidas:**
-- Cruce con "de X por Y" no tokeniza bien col_agr
-- Intent por keywords — falla con frases semánticas sin keywords explícitos
-- Pregunta de seguimiento sin contexto prev
-
-### v3 — Intent por LLM (Roadmap)
-Reemplazar `_detectar_intent()` por llamada a LLM liviano.
-Criterio de arranque: después de que Camí use Adly 30 días.
-
-### v4 — Queryn Text-to-Pandas (Fase 2)
-LLM pequeño genera código pandas → executor sandbox → LLM grande formatea.
+**Planner adicional:** ~300 tokens por pregunta que activa Text-to-Pandas (schema + pregunta + código generado).
 
 ---
 
@@ -274,9 +346,6 @@ LLM pequeño genera código pandas → executor sandbox → LLM grande formatea.
 
 **Criterio Fase 1→2:** Camí usa Adly 30 días consecutivos y confía en los números.
 
-**Roadmap Fase 3 — chat sin dataset:**
-Adly responde sin CSV/Sheet cargado. Modo conversacional: explica conceptos, sugiere análisis, y guía al usuario paso a paso para conectar su fuente (Sheet ID, subir CSV). Onboarding desde el chat mismo.
-
 ---
 
 ## Mapa de riesgos conocidos
@@ -288,7 +357,7 @@ Adly responde sin CSV/Sheet cargado. Modo conversacional: explica conceptos, sug
 - **R14** Si campo es null → decirlo explícitamente.
 - **R15** Toda respuesta incluye `data_freshness` y `confidence_note`.
 - **R16** Adly admite ignorancia. "No tengo ese dato" > número inventado.
-- **R17** Groq free ~8 preguntas/minuto con system prompt optimizado.
+- **R17** Groq free ~8 preguntas/minuto. Con Gemini como principal: sin rate limit relevante.
 
 ---
 
@@ -307,7 +376,7 @@ Adly responde sin CSV/Sheet cargado. Modo conversacional: explica conceptos, sug
 `/limpiar_duplicados` · `/rellenar [col] [estrategia]` · `/eliminar_por [col] [op] [valor]`
 
 ### Sistema
-`/config` · `/alertas` · `/metricas` · `/refresh` · `/limpiar` · `/estado` · `/guardar` · `/exportar` · `/ayuda`
+`/config` · `/alertas` · `/metricas` · `/refresh` · `/limpiar` · `/estado` · `/guardar` · `/exportar` · `/ayuda` · `/modelo [nombre]`
 
 ---
 
@@ -317,4 +386,19 @@ Adly responde sin CSV/Sheet cargado. Modo conversacional: explica conceptos, sug
 groq==0.4.2        ← NO actualizar, rompe con httpx superior
 httpx==0.27.0      ← NO actualizar, versión superior no acepta 'proxies'
 rapidfuzz>=3.0.0   ← agregar a requirements.txt
+google-generativeai ← ya instalado
 ```
+
+---
+
+## Fallback LLM — estado
+
+| Proveedor | Estado |
+|---|---|
+| Groq `llama-3.3-70b-versatile` | ✅ principal — rate limit 100k tokens/día free |
+| Gemini `gemini-2.5-flash` | ✅ fallback operativo · planner usa este |
+| Ollama | ❌ no corriendo — excluido del fallback chain |
+
+`.env` fallback chain: `groq,gemini`
+
+**Nota:** el planner de query_engine v3 usa Gemini directamente vía `google.generativeai` — independiente del fallback chain del engine principal.

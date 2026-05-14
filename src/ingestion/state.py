@@ -12,18 +12,18 @@ class AppState:
     def __init__(self):
         # In-memory storage for MVP
         self.config: Dict[str, Any] = {
-            "model": "groq",
+            "model": "groq", # Default, should match what's in .env or frontend
             "api_key": "",
             "data_source": "mock",
             "sheet_id": None,
             "created_at": "2026-04-01T10:00:00Z"
         }
-
+        
         # OrderedDicts para implementar política FIFO/LRU
         self.analyses: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self.messages: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
         self.dataset_info: OrderedDict[str, Dict[str, Any]] = OrderedDict()
-
+        
         # Engine instances and active DataFrames
         self.engines: OrderedDict[str, AdlyEngine] = OrderedDict()
         self.dataframes: OrderedDict[str, pd.DataFrame] = OrderedDict()
@@ -57,3 +57,4 @@ class AppState:
         self._enforce_limits()
 
 state = AppState()
+

@@ -53,19 +53,13 @@ async def create_analysis(
             if file.size and file.size > MAX_CSV_SIZE_BYTES:
                 raise HTTPException(status_code=413, detail=f"El archivo es demasiado grande (Máximo 25MB).")
             
-            # Leer archivo completo una sola vez
-            raw_bytes = await file.read()
-            if len(raw_bytes) > MAX_CSV_SIZE_BYTES:
+            # Additional check by reading chunks if file.size is not reliable
+            content = await file.read(MAX_CSV_SIZE_BYTES + 1)
+            if len(content) > MAX_CSV_SIZE_BYTES:
                 raise HTTPException(status_code=413, detail="El archivo excede el tamaño máximo permitido (25MB).")
-            for enc in ('utf-8-sig', 'utf-8', 'latin-1', 'cp1252'):
-                try:
-                    from io import BytesIO
-                    df_raw = pd.read_csv(BytesIO(raw_bytes), encoding=enc)
-                    break
-                except (UnicodeDecodeError, Exception):
-                    continue
-            else:
-                raise HTTPException(status_code=400, detail="No se pudo leer el archivo — prueba guardarlo como CSV UTF-8 desde Excel.")
+            await file.seek(0)
+            
+            df_raw = pd.read_csv(file.file)
             dataset_name = file.filename
 
             # Normalización defensiva — siempre antes de cualquier análisis

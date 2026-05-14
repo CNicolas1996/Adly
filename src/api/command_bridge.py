@@ -785,3 +785,159 @@ def despachar_comando(text: str, df, engine=None, validator=None, calc=None) -> 
         "df_nuevo": df,
         "es_comando": True,
     }
+
+
+# ── /modelo ──────────────────────────────────────────────────────────────────
+
+MODELOS_CONFIG = {
+    "groq":     {"label": "Groq",     "modelo": "llama-3.3-70b-versatile", "var_env": "GROQ_API_KEY",     "url": "https://console.groq.com/keys"},
+    "gemini":   {"label": "Gemini",   "modelo": "gemini-2.5-flash",        "var_env": "GEMINI_API_KEY",   "url": "https://aistudio.google.com/app/apikey"},
+    "openai":   {"label": "OpenAI",   "modelo": "gpt-4o-mini",             "var_env": "OPENAI_API_KEY",   "url": "https://platform.openai.com/api-keys"},
+    "deepseek": {"label": "DeepSeek", "modelo": "deepseek-chat",           "var_env": "DEEPSEEK_API_KEY", "url": "https://platform.deepseek.com/api_keys"},
+    "qwen":     {"label": "Qwen",     "modelo": "qwen-turbo",              "var_env": "QWEN_API_KEY",     "url": "https://bailian.console.aliyun.com/"},
+    "ollama":   {"label": "Ollama",   "modelo": "qwen2.5-coder:7b",        "var_env": None,               "url": None},
+}
+
+def bridge_modelo_status(modelo_activo: str) -> str:
+    """Muestra el modelo activo y los disponibles."""
+    import os
+    lineas = [f"## Modelo activo: **{modelo_activo}**\n"]
+    lineas.append("| Modelo | Disponible | Modelo base |")
+    lineas.append("|--------|------------|-------------|")
+    for key, cfg in MODELOS_CONFIG.items():
+        if cfg["var_env"] is None:
+            disponible = "local"
+        else:
+            tiene_key = bool(os.getenv(cfg["var_env"], "").strip())
+            disponible = "✅" if tiene_key else "❌ sin key"
+        activo = " ◀ activo" if key == modelo_activo else ""
+        lineas.append(f"| `{key}` | {disponible} | {cfg['modelo']}{activo} |")
+    lineas.append("\n_Usa `/modelo [nombre]` para cambiar. Ej: `/modelo gemini`_")
+    return "\n".join(lineas)
+
+
+def bridge_modelo_cambiar(nombre: str, modelo_activo: str) -> dict:
+    """
+    Inicia el cambio de modelo.
+    Retorna dict con:
+      - "ok": True si se puede cambiar sin key
+      - "necesita_key": True si falta la API key
+      - "mensaje": str para mostrar al usuario
+      - "pending": dict con info del modelo pendiente (si necesita key)
+    """
+    import os
+
+    nombre = nombre.lower().strip()
+    if nombre not in MODELOS_CONFIG:
+        nombres = ", ".join(f"`{k}`" for k in MODELOS_CONFIG)
+        return {
+            "ok": False,
+            "necesita_key": False,
+            "mensaje": f"❌ Modelo `{nombre}` no reconocido.\n\nDisponibles: {nombres}",
+            "pending": None,
+        }
+
+    if nombre == modelo_activo:
+        return {
+            "ok": False,
+            "necesita_key": False,
+            "mensaje": f"✅ Ya estás usando **{MODELOS_CONFIG[nombre]['label']}**.",
+            "pending": None,
+        }
+
+    cfg = MODELOS_CONFIG[nombre]
+
+    # Ollama no necesita key
+    if cfg["var_env"] is None:
+        return {
+            "ok": True,
+            "necesita_key": False,
+            "mensaje": f"✅ Cambiado a **{cfg['label']}** (`{cfg['modelo']}`). Asegúrate de tener Ollama corriendo.",
+            "pending": None,
+            "nuevo_modelo": nombre,
+        }
+
+    # Verificar si ya tiene key
+    tiene_key = bool(os.getenv(cfg["var_env"], "").strip())
+    if tiene_key:
+        return {
+            "ok": True,
+            "necesita_key": False,
+            "mensaje": f"✅ Cambiado a **{cfg['label']}** (`{cfg['modelo']}`).",
+            "pending": None,
+            "nuevo_modelo": nombre,
+        }
+
+    # Necesita key — iniciar flujo
+    return {
+        "ok": False,
+        "necesita_key": True,
+        "mensaje": (
+            f"**{cfg['label']}** necesita una API key.\n\n"
+            f"Consíguela en: {cfg['url']}\n\n"
+            f"Pégala aquí y la configuro automáticamente:"
+        ),
+        "pending": {"modelo": nombre, "var_env": cfg["var_env"], "label": cfg["label"]},
+    }
+
+
+def bridge_modelo_guardar_key(api_key: str, pending: dict) -> dict:
+    """
+    Guarda la API key en .env y confirma el cambio de modelo.
+    La key se enmascara en la respuesta.
+    """
+    import re
+
+    var_env   = pending["var_env"]
+    label     = pending["label"]
+    modelo    = pending["modelo"]
+    key_clean = api_key.strip()
+
+    if not key_clean or len(key_clean) < 8:
+        return {
+            "ok": False,
+            "mensaje": "❌ La key no parece válida. Inténtalo de nuevo.",
+            "nuevo_modelo": None,
+        }
+
+    # Enmascarar para mostrar al usuario
+    mascara = key_clean[:4] + "•" * (len(key_clean) - 8) + key_clean[-4:]
+
+    # Guardar en .env
+    try:
+        env_path = ".env"
+        try:
+            with open(env_path, "r") as f:
+                lineas = f.readlines()
+        except FileNotFoundError:
+            lineas = []
+
+        # Reemplazar si existe, agregar si no
+        nueva_linea = f"{var_env}={key_clean}\n"
+        encontrado  = False
+        for i, linea in enumerate(lineas):
+            if linea.startswith(f"{var_env}="):
+                lineas[i] = nueva_linea
+                encontrado = True
+                break
+        if not encontrado:
+            lineas.append(nueva_linea)
+
+        with open(env_path, "w") as f:
+            f.writelines(lineas)
+
+        # También setear en os.environ para que tome efecto sin reiniciar
+        import os
+        os.environ[var_env] = key_clean
+
+        return {
+            "ok": True,
+            "mensaje": f"✅ **{label}** configurado.\nKey guardada: `{mascara}`\nModelo activo cambiado a **{label}**.",
+            "nuevo_modelo": modelo,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "mensaje": f"❌ No pude guardar la key: {e}",
+            "nuevo_modelo": None,
+        }

@@ -7,6 +7,7 @@ import pandas as pd
 from google.oauth2.service_account import Credentials
 from abc import ABC, abstractmethod
 from dotenv import load_dotenv
+from src.ingestion.ingestion_normalizer import normalizar
 import os
 
 load_dotenv()

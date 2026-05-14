@@ -18,24 +18,181 @@ logger = logging.getLogger("adly.value_mapper")
 # Por categoría semántica — extensible
 # ─────────────────────────────────────────
 
+# ─────────────────────────────────────────
+# VOCABULARIO CANÓNICO DE STAGES
+#
+# Tres categorías semánticas — nunca mezclar:
+#
+#   EMBUDO      — etapas del proceso de conversión (ordenadas)
+#                 lead → warm_lead → contacted → follow_up
+#                 → appointment_set → venta | perdido
+#
+#   OPERACIONAL — estados que no bloquean el embudo, el lead puede retomar
+#                 no_show (no llegó a la cita)
+#                 no_contactado (intentos sin respuesta)
+#
+#   DESCARTE    — problemas de calidad de dato, NO son etapas del embudo
+#                 descarte (spam, duplicados, inválidos)
+#
+# Regla de oro: si un valor no encaja en ninguna categoría → LLM fallback.
+# Si el LLM tampoco lo resuelve → None (reportado como no_reconocido).
+# ─────────────────────────────────────────
+
+# Orden del embudo — para análisis de conversión y velocidad
+EMBUDO_ORDEN = {
+    "lead":            1,
+    "warm_lead":       2,
+    "contacted":       3,
+    "follow_up":       4,
+    "appointment_set": 5,
+    "venta":           6,
+    "perdido":         6,  # salida del embudo, mismo nivel que venta
+}
+
+# Categoría por valor canónico — para filtrar en análisis
+STAGE_CATEGORIA = {
+    "lead":            "embudo",
+    "warm_lead":       "embudo",
+    "contacted":       "embudo",
+    "follow_up":       "embudo",
+    "appointment_set": "embudo",
+    "venta":           "embudo",
+    "perdido":         "embudo",
+    "no_show":         "operacional",
+    "no_contactado":   "operacional",
+    "descarte":        "calidad",
+}
+
 SINONIMOS_ESTADO = {
-    # lead
-    "lead": "lead", "new": "lead", "nuevo": "lead", "entrada": "lead",
-    "inbound": "lead", "contacto": "lead",
-    # mql
-    "mql": "mql", "qualified": "mql", "calificado": "mql",
-    "marketing qualified": "mql", "interesado_calificado": "mql",
-    # sql
-    "sql": "sql", "opportunity": "sql", "oportunidad": "sql",
-    "sales qualified": "sql", "en_proceso": "sql",
-    # venta
-    "venta": "venta", "sold": "venta", "won": "venta", "sale": "venta",
-    "closed_won": "venta", "converted": "venta", "cerrado": "venta",
-    "ganado": "venta", "cliente": "venta", "closed": "venta",
-    # perdido
-    "perdido": "perdido", "lost": "perdido", "cold": "perdido",
-    "descartado": "perdido", "no_interesado": "perdido",
-    "closed_lost": "perdido", "churn": "perdido",
+    # ── EMBUDO — lead (entrada) ──────────────────────────────────────────
+    "lead":             "lead",
+    "new":              "lead",
+    "nuevo":            "lead",
+    "nueva":            "lead",
+    "entrada":          "lead",
+    "inbound":          "lead",
+    "new_lead":         "lead",
+    "nuevo_lead":       "lead",
+    "fresh":            "lead",
+
+    # ── EMBUDO — warm_lead (interés detectado, sin contacto) ────────────
+    "warm_lead":        "warm_lead",
+    "warm":             "warm_lead",
+    "tibio":            "warm_lead",
+    "interesado":       "warm_lead",
+    "caliente":         "warm_lead",  # "lead caliente" en algunos CRMs
+    "hot_lead":         "warm_lead",
+
+    # ── EMBUDO — contacted (contacto inicial hecho) ──────────────────────
+    "contacted":        "contacted",
+    "contactado":       "contacted",
+    "en_contacto":      "contacted",
+    "first_contact":    "contacted",
+    "primer_contacto":  "contacted",
+    "reached":          "contacted",
+    "alcanzado":        "contacted",
+    # MQL/SQL — en el contexto de Camí equivalen a contacted/follow_up
+    "mql":              "contacted",
+    "qualified":        "contacted",
+    "calificado":       "contacted",
+    "marketing_qualified": "contacted",
+    "interesado_calificado": "contacted",
+
+    # ── EMBUDO — follow_up (seguimiento activo) ──────────────────────────
+    "follow_up":        "follow_up",
+    "follow-up":        "follow_up",
+    "followup":         "follow_up",
+    "seguimiento":      "follow_up",
+    "en_seguimiento":   "follow_up",
+    "nurturing":        "follow_up",
+    "en_proceso":       "follow_up",
+    "sql":              "follow_up",
+    "opportunity":      "follow_up",
+    "oportunidad":      "follow_up",
+    "sales_qualified":  "follow_up",
+    "pipeline":         "follow_up",
+
+    # ── EMBUDO — appointment_set (cita agendada) ─────────────────────────
+    "appointment_set":  "appointment_set",
+    "appointment":      "appointment_set",
+    "cita_agendada":    "appointment_set",
+    "cita":             "appointment_set",
+    "demo_scheduled":   "appointment_set",
+    "demo_agendada":    "appointment_set",
+    "meeting_set":      "appointment_set",
+    "reunión_agendada": "appointment_set",
+    "scheduled":        "appointment_set",
+    "agendado":         "appointment_set",
+
+    # ── EMBUDO — venta (ganado) ──────────────────────────────────────────
+    "venta":            "venta",
+    "sold":             "venta",
+    "won":              "venta",
+    "sale":             "venta",
+    "closed_won":       "venta",
+    "converted":        "venta",
+    "cerrado":          "venta",
+    "ganado":           "venta",
+    "cliente":          "venta",
+    "closed":           "venta",
+    "deal_won":         "venta",
+    "signed":           "venta",
+    "firmado":          "venta",
+    "pagó":             "venta",
+    "pago_recibido":    "venta",
+
+    # ── EMBUDO — perdido (salida definitiva del embudo) ──────────────────
+    "perdido":          "perdido",
+    "lost":             "perdido",
+    "cold":             "perdido",
+    "descartado":       "perdido",
+    "no_interesado":    "perdido",
+    "closed_lost":      "perdido",
+    "churn":            "perdido",
+    "deal_lost":        "perdido",
+    "not_interested":   "perdido",
+    "unqualified":      "perdido",
+    "no_califica":      "perdido",
+    "rechazado":        "perdido",
+
+    # ── OPERACIONAL — no_show (faltó a la cita, puede retomar) ──────────
+    "no_show":          "no_show",
+    "no-show":          "no_show",
+    "noshow":           "no_show",
+    "faltó":            "no_show",
+    "falto":            "no_show",
+    "no_asistió":       "no_show",
+    "no_asistio":       "no_show",
+    "missed":           "no_show",
+    "ausente":          "no_show",
+    "no_se_presentó":   "no_show",
+
+    # ── OPERACIONAL — no_contactado (intentos fallidos, no es perdido) ───
+    "no_contactado":    "no_contactado",
+    "no_contact":       "no_contactado",
+    "unreachable":      "no_contactado",
+    "sin_respuesta":    "no_contactado",
+    "no_responde":      "no_contactado",
+    "no_answer":        "no_contactado",
+    "unresponsive":     "no_contactado",
+    "ghosting":         "no_contactado",
+
+    # ── CALIDAD — descarte (problema de datos, no es stage del embudo) ───
+    "descarte":         "descarte",
+    "spam":             "descarte",
+    "duplicate":        "descarte",
+    "duplicado":        "descarte",
+    "duplicated":       "descarte",
+    "invalid":          "descarte",
+    "inválido":         "descarte",
+    "invalido":         "descarte",
+    "fake":             "descarte",
+    "falso":            "descarte",
+    "bot":              "descarte",
+    "test":             "descarte",
+    "prueba":           "descarte",
+    "junk":             "descarte",
+    "basura":           "descarte",
 }
 
 SYSTEM_PROMPT_VALUE_MAPPER = """Eres un experto en análisis de datos de marketing digital.
@@ -152,6 +309,36 @@ class ValueMapper:
         ]
 
         return df, no_reconocidos
+
+    @staticmethod
+    def categoria(valor_canonico: str) -> str:
+        """
+        Retorna la categoría semántica de un valor canónico.
+        "embudo" | "operacional" | "calidad" | "desconocido"
+
+        Uso: ValueMapper.categoria("no_show") → "operacional"
+        """
+        return STAGE_CATEGORIA.get(str(valor_canonico).lower(), "desconocido")
+
+    @staticmethod
+    def orden_embudo(valor_canonico: str) -> int:
+        """
+        Retorna el orden numérico en el embudo (1-6).
+        0 si el valor no es una etapa del embudo.
+
+        Uso: ValueMapper.orden_embudo("appointment_set") → 5
+        """
+        return EMBUDO_ORDEN.get(str(valor_canonico).lower(), 0)
+
+    @staticmethod
+    def es_descarte(valor_canonico: str) -> bool:
+        """True si el valor es un problema de calidad de dato, no un stage."""
+        return STAGE_CATEGORIA.get(str(valor_canonico).lower()) == "calidad"
+
+    @staticmethod
+    def es_embudo(valor_canonico: str) -> bool:
+        """True si el valor es una etapa válida del embudo de conversión."""
+        return STAGE_CATEGORIA.get(str(valor_canonico).lower()) == "embudo"
 
     # ─────────────────────────────────────
     # MAPEO: REGLAS → LLM → CACHE

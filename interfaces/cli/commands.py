@@ -1039,7 +1039,8 @@ def cmd_cohorts(df) -> str | None:
         return
 
     df2["_cohorte"] = df2[col_fecha].dt.to_period("M").astype(str)
-    df2["_es_venta"] = df2[col_estado].isin(estados_venta)
+    # Después de normalizar, todos los estados de venta son "venta"
+    df2["_es_venta"] = df2[col_estado] == "venta"
 
     grupos = df2.groupby("_cohorte")
     filas = []

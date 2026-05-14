@@ -34,3 +34,10 @@ desktop.ini
 *.log
 logs/
 
+# === Claude Code internals ===
+.claude/
+
+# === Archivos temporales/sesión ===
+Select-String
+python
+*.adly_schema.json

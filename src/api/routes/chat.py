@@ -21,6 +21,8 @@ from src.api.state import state
 from src.api.limiter import limiter
 from src.processing.query_engine import ejecutar_query_analitica
 from src.api.command_bridge import despachar_comando
+from src.processing.data_quality import DataQualityReport
+from src.processing.data_cleaner import CleaningSession
 
 
 # ── Parser de tablas ASCII de Rich a estructuradas ────────────────────────────
@@ -224,6 +226,190 @@ async def send_message(request: Request, payload: ChatMessage):
         state._pending_confirms = {}
     pending_key = f"{analysis_id}_pending_query"
 
+    # ── 0. CLEANING SESSION activa — interceptar antes que todo ──────────────
+    # Si hay una sesión de limpieza en curso para este analysis_id,
+    # el mensaje del usuario es una opción de limpieza ("1", "2", "s", etc.)
+    # Se resuelve aquí y se retorna — no llega al LLM ni a otros handlers.
+    if not hasattr(state, "_cleaning_sessions"):
+        state._cleaning_sessions = {}
+
+    if analysis_id in state._cleaning_sessions:
+        session: CleaningSession = state._cleaning_sessions[analysis_id]
+
+        # ── Selección de modo pendiente ───────────────────────────────────────
+        mode_pending = getattr(state, "_cleaning_mode_pending", {})
+        if mode_pending.get(analysis_id):
+            mode_pending.pop(analysis_id)
+
+            if text.strip() == "1":  # Automático
+                resultados = session.apply_auto()
+                summary    = session.summary()
+                df_final   = session.final_df
+                if df_final is not None:
+                    state.dataframes[analysis_id] = df_final
+                    try:
+                        if not hasattr(state, "_quality_reports"):
+                            state._quality_reports = {}
+                        state._quality_reports[analysis_id] = DataQualityReport.from_df(df_final)
+                    except Exception:
+                        pass
+                del state._cleaning_sessions[analysis_id]
+                return _save_and_return(analysis_id, _bot_msg(
+                    content    = f"✅ Limpieza automática completada.\n\n{summary}",
+                    confidence = 1.0,
+                    note       = "Dataset actualizado — decisiones conservadoras aplicadas",
+                ))
+
+            elif text.strip() == "3":  # Mixto
+                # Marcar issues críticos (>30%) como manuales en la sesión
+                # Los demás se resuelven automático ahora
+                issues_criticos = [
+                    i for i in session._issues_pendientes if i.impacto > 30
+                ]
+                issues_menores  = [
+                    i for i in session._issues_pendientes if i.impacto <= 30
+                ]
+                # Resolver menores automático
+                for issue in issues_menores:
+                    opcion = CleaningSession._OPCION_SEGURA.get(issue.tipo, "s")
+                    if issue in session._issues_pendientes:
+                        session._issues_pendientes.remove(issue)
+                        session._issue_actual = issue
+                        session.apply(opcion)
+                # Continuar con manuales si quedan
+                if session.done():
+                    summary = session.summary()
+                    if session.final_df is not None:
+                        state.dataframes[analysis_id] = session.final_df
+                    del state._cleaning_sessions[analysis_id]
+                    return _save_and_return(analysis_id, _bot_msg(
+                        content = f"✅ Limpieza mixta completada — sin problemas críticos.\n\n{summary}",
+                        confidence = 1.0,
+                    ))
+                first_issue = session.next_issue()
+                return _save_and_return(analysis_id, _bot_msg(
+                    content = (
+                        f"Problemas menores resueltos automáticamente. "
+                        f"Quedan {session.progress()[1] - session.progress()[0]} problemas críticos:\n\n"
+                        f"{session.render_issue(first_issue)}"
+                    ),
+                    confidence = 1.0,
+                    note = "Modo mixto — responde con el número de opción",
+                ))
+
+            else:  # Manual (2) o cualquier otro input
+                first_issue = session.next_issue()
+                return _save_and_return(analysis_id, _bot_msg(
+                    content = (
+                        f"Modo manual activado. Vamos problema por problema.\n"
+                        f"Escribe `cancelar` en cualquier momento.\n\n"
+                        f"{session.render_issue(first_issue)}"
+                    ),
+                    confidence = 1.0,
+                    note = "Sesión de limpieza manual — responde con el número de opción",
+                ))
+
+        # Cancelar sesión explícitamente
+        if text.lower() in {"cancelar", "cancel", "salir", "exit", "no", "listo"}:
+            summary = session.summary()
+            # Aplicar df limpio al estado si hubo cambios reales
+            if session.final_df is not None and len(session.decisions_log) > 0:
+                state.dataframes[analysis_id] = session.final_df
+            # Actualizar quality report con el df limpio
+            try:
+                if not hasattr(state, "_quality_reports"):
+                    state._quality_reports = {}
+                state._quality_reports[analysis_id] = DataQualityReport.from_df(session.final_df)
+            except Exception:
+                pass
+            del state._cleaning_sessions[analysis_id]
+            return _save_and_return(analysis_id, _bot_msg(
+                content    = f"Sesión de limpieza finalizada.\n\n{summary}",
+                confidence = 1.0,
+                note       = "Limpieza de datos completada",
+            ))
+
+        # Aplicar la opción elegida
+        issue = session.next_issue()
+        if issue is None or session.done():
+            # No quedan issues — cerrar sesión
+            summary = session.summary()
+            if session.final_df is not None:
+                state.dataframes[analysis_id] = session.final_df
+            # Actualizar quality report con el df limpio
+            try:
+                if not hasattr(state, "_quality_reports"):
+                    state._quality_reports = {}
+                state._quality_reports[analysis_id] = DataQualityReport.from_df(session.final_df)
+            except Exception:
+                pass
+            del state._cleaning_sessions[analysis_id]
+            return _save_and_return(analysis_id, _bot_msg(
+                content    = f"✅ Todos los problemas revisados.\n\n{summary}",
+                confidence = 1.0,
+                note       = "Dataset actualizado",
+            ))
+
+        # Prefijo de opción — el usuario puede tipear "1", "/1", "opcion 1"
+        opcion_id = text.strip().lower().replace("opcion ", "").replace("/", "").strip()
+
+        # Opciones que requieren input adicional — teléfono con prefijo custom
+        kwargs = {}
+        if issue.tipo == "phone_sin_prefijo" and opcion_id == "1":
+            # Si el texto tiene el prefijo incluido (ej: "1 +57"), extraerlo
+            partes_tel = text.strip().split()
+            if len(partes_tel) > 1 and partes_tel[1].startswith("+"):
+                kwargs["prefijo_default"] = partes_tel[1]
+            else:
+                # Pedir el prefijo antes de continuar
+                return _save_and_return(analysis_id, _bot_msg(
+                    content    = "¿Qué prefijo internacional uso? (ej: `+1` para USA, `+57` para Colombia, `+52` para México)\nEscribe: `1 +57`",
+                    confidence = 1.0,
+                    note       = "Esperando prefijo",
+                ))
+
+        result = session.apply(opcion_id, **kwargs)
+
+        if result is None:
+            return _save_and_return(analysis_id, _bot_msg(
+                content    = f"Opción no válida. Elige: {[o.id for o in issue.opciones]}",
+                confidence = 1.0,
+            ))
+
+        # Actualizar df en state si cambió
+        if result.filas_despues != result.filas_antes or result.columnas_nuevas:
+            state.dataframes[analysis_id] = session.final_df
+
+        # Presentar resultado + siguiente issue (si quedan)
+        respuesta_parts = [session.render_result(result)]
+
+        next_issue = session.next_issue()
+        if next_issue is None or session.done():
+            summary = session.summary()
+            if session.final_df is not None:
+                state.dataframes[analysis_id] = session.final_df
+                try:
+                    if not hasattr(state, "_quality_reports"):
+                        state._quality_reports = {}
+                    state._quality_reports[analysis_id] = DataQualityReport.from_df(session.final_df)
+                except Exception:
+                    pass
+            del state._cleaning_sessions[analysis_id]
+            respuesta_parts.append(f"\n✅ Todos los problemas revisados.\n\n{summary}")
+        else:
+            respuesta_parts.append(f"\n{session.render_issue(next_issue)}")
+
+        engine.agregar_contexto_comando(
+            "/alertas",
+            f"Limpieza en curso. Último resultado: {result.descripcion}"
+        )
+
+        return _save_and_return(analysis_id, _bot_msg(
+            content    = "\n".join(respuesta_parts),
+            confidence = 1.0,
+            note       = f"Limpieza interactiva — {session.progress()[0]}/{session.progress()[1]} issues",
+        ))
+
     # ── 1. CONFIRMAR pendiente ────────────────────────────────────────────────
     if text.lower() in {"sí", "si", "yes", "s", "ok", "confirmar"}:
         query_pendiente = state._pending_confirms.get(pending_key)
@@ -242,8 +428,23 @@ async def send_message(request: Request, payload: ChatMessage):
 
     if text.lower() in {"no", "cancelar", "cancel"}:
         state._pending_confirms.pop(pending_key, None)
+        state.pending_model.pop(analysis_id, None)
         return _save_and_return(analysis_id,
             _bot_msg("Ok, cancelado. ¿En qué más puedo ayudarte?"))
+
+    # ── API key pendiente para /modelo ───────────────────────────────────────
+    if analysis_id in state.pending_model:
+        from src.api.command_bridge import bridge_modelo_guardar_key
+        pending = state.pending_model.pop(analysis_id)
+        resultado = bridge_modelo_guardar_key(text, pending)
+        if resultado.get("nuevo_modelo"):
+            state.modelo_activo = resultado["nuevo_modelo"]
+            engine.cambiar_llm(resultado["nuevo_modelo"])
+        return _save_and_return(analysis_id, _bot_msg(
+            content   = resultado["mensaje"],
+            freshness = "ahora",
+            note      = "Configuración de modelo",
+        ))
 
     # ── 2. Comandos / ────────────────────────────────────────────────────────
     if text.startswith("/"):
@@ -259,6 +460,33 @@ async def send_message(request: Request, payload: ChatMessage):
             "/descripción": "/describe",
         }
         cmd_base = _ALIASES.get(cmd_base, cmd_base)
+
+        # /modelo — cambio de modelo LLM con flujo de API key
+        if cmd_base == "/modelo":
+            from src.api.command_bridge import bridge_modelo_status, bridge_modelo_cambiar
+            nombre = partes[1].lower() if len(partes) > 1 else ""
+            if not nombre:
+                return _save_and_return(analysis_id, _bot_msg(
+                    content   = bridge_modelo_status(state.modelo_activo),
+                    freshness = "ahora",
+                    note      = "Modelos disponibles",
+                ))
+            resultado = bridge_modelo_cambiar(nombre, state.modelo_activo)
+            if resultado["necesita_key"]:
+                state.pending_model[analysis_id] = resultado["pending"]
+                return _save_and_return(analysis_id, _bot_msg(
+                    content   = resultado["mensaje"],
+                    freshness = "ahora",
+                    note      = f"Configurando {resultado['pending']['label']}",
+                ))
+            if resultado.get("nuevo_modelo"):
+                state.modelo_activo = resultado["nuevo_modelo"]
+                engine.cambiar_llm(resultado["nuevo_modelo"])
+            return _save_and_return(analysis_id, _bot_msg(
+                content   = resultado["mensaje"],
+                freshness = "ahora",
+                note      = "Configuración de modelo",
+            ))
 
         # /ayuda — manejado por el bridge (no necesita df)
         if cmd_base == "/ayuda":
@@ -304,12 +532,12 @@ async def send_message(request: Request, payload: ChatMessage):
                 note      = "Estado del engine",
             ))
 
-        # /metricas — requiere MetricsCalculator, no está en commands.py igual
+        # /metricas — retorna DataTable estructurada directo, sin LLM
         if cmd_base == "/metricas" and df is not None:
             try:
                 from src.processing.metrics import MetricsCalculator, CONFIG_DEFAULT
 
-                # Auto-detectar columna de campaña — no hardcodear "campana"
+                # Auto-detectar columna de campaña
                 col_campana = None
                 for col in df.columns:
                     col_n = col.lower()
@@ -318,21 +546,61 @@ async def send_message(request: Request, payload: ChatMessage):
                         break
                 col_campana = col_campana or df.columns[0]
 
-                # Construir config con la columna real detectada
-                config_auto = {**CONFIG_DEFAULT, "col_campana": col_campana}
-                calc    = MetricsCalculator(config=config_auto)
-                metr    = calc.calcular(df, nivel="campana")
+                # Auto-detectar columna de estado
+                col_estado = None
+                for col in df.columns:
+                    col_n = col.lower()
+                    if any(p in col_n for p in ["estado", "status", "stage", "funnel_stage"]):
+                        col_estado = col
+                        break
+
+                # Normalizar valores de estado al vocabulario estándar
+                # ValueMapper mapea closed_won→venta, qualified→mql, etc.
+                estado_mql   = "mql"
+                estado_sql   = "sql"
+                estado_venta = "venta"
+
+                if col_estado:
+                    from src.processing.value_mapper import ValueMapper
+                    vm = ValueMapper()
+                    df, _ = vm.normalizar_estados(df, col_estado)
+                    # Tras normalizar, los valores ya son mql/sql/venta/lead/perdido
+
+                # Construir config con todas las columnas reales detectadas
+                config_auto = {
+                    **CONFIG_DEFAULT,
+                    "col_campana":   col_campana,
+                    "col_estado":    col_estado or CONFIG_DEFAULT.get("col_estado"),
+                    "estado_mql":    estado_mql,
+                    "estado_sql":    estado_sql,
+                    "estado_venta":  estado_venta,
+                }
+                calc  = MetricsCalculator(config=config_auto)
+                metr  = calc.calcular(df, nivel="campana")
+
+                # Contexto para el engine (para preguntas de seguimiento)
                 resumen = calc.resumen_para_llm(metr, nivel="campana")
                 engine.agregar_contexto_comando("/metricas", resumen)
-                respuesta = engine.chat(
-                    "Muéstrame las métricas por campaña: leads, MQL, CPL, CPMQL y ROAS. "
-                    "Presenta los datos en formato tabla y agrega un insight por campaña."
-                )
+
+                # Construir tabla estructurada directo — sin LLM
+                col_grupo = calc._col("campana")
+                tabla = []
+                for _, fila in metr.iterrows():
+                    tabla.append({
+                        "Campaña":   str(fila.get(col_grupo, "—")),
+                        "Leads":     int(fila.get("total_leads", 0)),
+                        "MQL":       int(fila.get("total_mql", 0)),
+                        "CPL":       f"${fila.get('cpl', 0):,.0f}",
+                        "CPMQL":     f"${fila.get('cpmql', 0):,.0f}",
+                        "ROAS":      f"{fila.get('roas', 0):.2f}",
+                        "Tasa Venta": f"{fila.get('tasa_venta', 0):.1%}",
+                    })
+
                 return _save_and_return(analysis_id, _bot_msg(
-                    content    = respuesta.respuesta,
-                    confidence = respuesta.confianza,
-                    freshness  = getattr(respuesta, "data_freshness", "ahora"),
-                    note       = getattr(respuesta, "confidence_note", ""),
+                    content   = f"Métricas por campaña — columna detectada: `{col_campana}`",
+                    freshness = "datos locales",
+                    note      = "Resultado directo del análisis",
+                    table     = tabla,
                 ))
             except Exception as e:
                 print(f"[chat] Error /metricas: {e}")
@@ -341,24 +609,67 @@ async def send_message(request: Request, payload: ChatMessage):
                     confidence = 0.5,
                 ))
 
-        # /alertas — requiere DataValidator
+        # /alertas — lee el DataQualityReport pre-calculado al cargar
+        # Si por alguna razón no existe, lo calcula ahora (fallback)
         if cmd_base == "/alertas" and df is not None:
             try:
-                from src.processing.alerts import DataValidator as AlertValidator
-                manager = AlertValidator(df)
-                manager.validate()
-                lines = []
-                for a in manager.alertas:
-                    icon = "❌" if a.nivel.value == "critica" else "⚠️" if a.nivel.value == "advertencia" else "✅"
-                    lines.append(f"{icon} **{a.nivel.value.upper()}** — {a.mensaje}")
-                    lines.append(f"   → {a.recomendacion}")
-                content = "\n".join(lines) if lines else "✅ Datos en buen estado."
+                # Leer desde state si existe — evita doble cálculo
+                quality_reports = getattr(state, "_quality_reports", {})
+                report = quality_reports.get(analysis_id)
+
+                if report is None:
+                    report = DataQualityReport.from_df(df)
+                    if not hasattr(state, "_quality_reports"):
+                        state._quality_reports = {}
+                    state._quality_reports[analysis_id] = report
+                score   = report.severity_score()
+                summary = report.to_summary()
+
+                # Si no hay problemas — solo mostrar el reporte limpio
+                if score == 0:
+                    engine.agregar_contexto_comando("/alertas", summary)
+                    return _save_and_return(analysis_id, _bot_msg(
+                        content    = f"✅ {summary}",
+                        confidence = 1.0,
+                        note       = "Validación de integridad del dataset",
+                    ))
+
+                # Iniciar sesión de limpieza interactiva
+                session = CleaningSession.start(report)
+                state._cleaning_sessions[analysis_id] = session
+
+                nivel  = "CRÍTICO" if score >= 70 else "ALTO" if score >= 40 else "MEDIO"
+                n_issues = session.progress()[1]
+
+                # Preguntar modo antes de mostrar el primer issue
+                # Guardar en state que estamos en selección de modo
+                if not hasattr(state, "_cleaning_mode_pending"):
+                    state._cleaning_mode_pending = {}
+                state._cleaning_mode_pending[analysis_id] = True
+
+                header = (
+                    f"**Reporte de calidad — Score: {score}/100 ({nivel})**\n\n"
+                    f"{summary}\n\n"
+                    f"Encontré **{n_issues} problemas**. ¿Cómo quieres manejarlos?\n\n"
+                    f"**[1] Automático** — Adly aplica la decisión más segura en cada problema\n"
+                    f"      Sin preguntar, sin eliminar datos, siempre conservador.\n\n"
+                    f"**[2] Manual** — Adly te pregunta qué hacer en cada problema\n"
+                    f"      Tú decides, opción por opción.\n\n"
+                    f"**[3] Mixto** — Automático para problemas menores, manual para críticos\n"
+                    f"      Críticos (>30% afectados) te los pregunta. El resto los resuelve solo."
+                )
+
+                engine.agregar_contexto_comando("/alertas", summary)
+
                 return _save_and_return(analysis_id, _bot_msg(
-                    content = content,
-                    note    = "Validación de integridad del dataset",
+                    content    = header,
+                    confidence = score / 100,
+                    note       = "Selecciona el modo de limpieza",
                 ))
+
             except Exception as e:
-                print(f"[chat] Error /alertas: {e}")
+                import traceback
+                print(f"[chat] Error /alertas: {e}\n{traceback.format_exc()}")
                 return _save_and_return(analysis_id, _bot_msg(
                     content    = f"⚠️ Error ejecutando /alertas: {e}",
                     confidence = 0.5,
@@ -432,9 +743,25 @@ async def send_message(request: Request, payload: ChatMessage):
         ))
 
     # ── 3. Query analítica (pandas antes del LLM) ────────────────────────────
+    print(f"[CHAT] paso 3 — query analítica con: '{text}'")
     tiene_resultado_pandas = False
+
+    # Palabras que indican que la pregunta es seguimiento de la anterior
+    _REFS_PREVIAS = {
+        "ese", "esa", "eso", "esos", "esas",
+        "esta", "este", "estos", "estas",
+        "anterior", "arriba", "mismo", "misma",
+        "el que dijiste", "la que dijiste",
+        "eso que", "esa que", "por qué", "por que",
+        "cómo así", "como así", "explica", "explícame",
+        "y por qué", "y cómo", "qué significa",
+    }
+    _es_seguimiento = any(ref in text.lower() for ref in _REFS_PREVIAS)
+
     if df is not None:
+        print(f"[CHAT] df disponible — ejecutando planner")
         resultado_pandas = ejecutar_query_analitica(text, df)
+        print(f"[CHAT] resultado_pandas={resultado_pandas is not None}")
         if resultado_pandas:
             if resultado_pandas.startswith("CONFIRMAR:"):
                 state._pending_confirms[pending_key] = text
@@ -445,6 +772,12 @@ async def send_message(request: Request, payload: ChatMessage):
                 ))
             engine.agregar_contexto_comando("query_analitica", resultado_pandas)
             tiene_resultado_pandas = True
+        else:
+            # Pregunta nueva sin resultado pandas propio y no es seguimiento
+            # → limpiar contexto anterior para no contaminar la respuesta del LLM
+            if not _es_seguimiento:
+                engine.limpiar_contexto_comando()
+                print(f"[CHAT] contexto comando limpiado — pregunta nueva sin resultado pandas")
 
     # ── 4. LLM ───────────────────────────────────────────────────────────────
     # Si hay resultado de pandas, instruir al LLM explícitamente para formatear
