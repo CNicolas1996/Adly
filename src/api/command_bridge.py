@@ -201,7 +201,8 @@ def bridge_describe(df) -> str:
 def bridge_head(df, n: int = 5) -> dict | str:
     if _df_vacio(df):
         return _sin_datos()
-    sub = df.head(n)
+    sub = df.head(n).copy()
+    sub = sub.where(pd.notnull(sub), None)  # NaN → None (JSON null)
     return {
         "tipo":   "tabla",
         "tabla":  sub.to_dict(orient="records"),
@@ -212,7 +213,8 @@ def bridge_head(df, n: int = 5) -> dict | str:
 def bridge_sample(df, n: int = 5) -> dict | str:
     if _df_vacio(df):
         return _sin_datos()
-    sub = df.sample(min(n, len(df)))
+    sub = df.sample(min(n, len(df))).copy()
+    sub = sub.where(pd.notnull(sub), None)  # NaN → None (JSON null)
     return {
         "tipo":   "tabla",
         "tabla":  sub.to_dict(orient="records"),

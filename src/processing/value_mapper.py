@@ -81,6 +81,7 @@ SINONIMOS_ESTADO = {
     "tibio":            "warm_lead",
     "interesado":       "warm_lead",
     "caliente":         "warm_lead",  # "lead caliente" en algunos CRMs
+    "lead_caliente":    "warm_lead",
     "hot_lead":         "warm_lead",
 
     # ── EMBUDO — contacted (contacto inicial hecho) ──────────────────────
@@ -130,6 +131,9 @@ SINONIMOS_ESTADO = {
     "won":              "venta",
     "sale":             "venta",
     "closed_won":       "venta",
+    "cerrado_ganado":   "venta",
+    "closed_ganado":    "venta",
+    "cerrado_won":      "venta",
     "converted":        "venta",
     "cerrado":          "venta",
     "ganado":           "venta",
@@ -148,6 +152,8 @@ SINONIMOS_ESTADO = {
     "descartado":       "perdido",
     "no_interesado":    "perdido",
     "closed_lost":      "perdido",
+    "cerrado_perdido":  "perdido",
+    "closed_perdido":   "perdido",
     "churn":            "perdido",
     "deal_lost":        "perdido",
     "not_interested":   "perdido",
@@ -165,6 +171,7 @@ SINONIMOS_ESTADO = {
     "no_asistio":       "no_show",
     "missed":           "no_show",
     "ausente":          "no_show",
+    "no_se_presento":   "no_show",
     "no_se_presentó":   "no_show",
 
     # ── OPERACIONAL — no_contactado (intentos fallidos, no es perdido) ───

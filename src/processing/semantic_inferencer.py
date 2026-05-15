@@ -93,7 +93,7 @@ NOMBRE_DIRECTO = {
     "col_name":      ["nombre", "name", "full_name", "fullname", "contacto"],
     "col_date":      ["fecha", "date", "created", "timestamp", "creacion", "registro"],
     "col_id":        ["_id", "ghl_id", "contact_id", "lead_id", "uuid", "id_"],
-    "col_campana":   ["campana", "campaign", "camp"],
+    "col_campana":   ["campana", "campaign", "camp", "primera atribucion", "atribucion", "primera_atribucion", "attribution", "fuente"],
     "col_adset":     ["adset", "ad_set", "conjunto"],
     "col_ad":        ["_ad", "ad_name", "anuncio", "creativo"],
     "col_estado":    ["estado", "stage", "status", "etapa", "funnel"],
@@ -512,6 +512,7 @@ class SemanticInferencer:
             "spam":            "spam",
             "no show":         "no_se_presento",
             "no se presento":  "no_se_presento",
+            "no se presentó":  "no_se_presento",
             "appointment set": "cita_agendada",
             "cita agendada":   "cita_agendada",
             "follow up":       "seguimiento",
@@ -521,6 +522,12 @@ class SemanticInferencer:
             "warm lead":       "lead_caliente",
             "hot lead":        "lead_caliente",
             "cold lead":       "lead_frio",
+            "cerrado ganado":  "venta",
+            "closed ganado":   "venta",
+            "ganado":          "venta",
+            "cerrado perdido": "perdido",
+            "no contactado":   "no_contactado",
+            "lead caliente":   "lead_caliente",
         }
         value_map_directo = {}
         valores_pendientes = []

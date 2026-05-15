@@ -949,10 +949,11 @@ def _estados_venta(df, col_estado: str) -> list:
         return []
     vals = df[col_estado].dropna().unique()
     patrones_venta = {
-        "venta", "sale", "won", "cerrado", "closed", "converted", "vendido",
-        "closed_won", "conversion",  # valores GHL comunes
+        "venta", "ventas", "sale", "won", "closed won", "closed_won",
+        "cerrado ganado", "closed ganado", "ganado", "cerrado",
+        "converted", "vendido", "conversion",
     }
-    return [v for v in vals if str(v).lower() in patrones_venta]
+    return [v for v in vals if str(v).lower().strip() in patrones_venta]
 
 
 def _normalizar_estados_df(df: pd.DataFrame, col_estado: str) -> tuple:

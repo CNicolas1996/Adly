@@ -89,7 +89,8 @@ class MetricsCalculator:
     def resumen_para_llm(
         self,
         df_metricas: pd.DataFrame,
-        nivel: str = "campana"
+        nivel: str = "campana",
+        _muestra_pequena: bool = False
     ) -> str:
         """
         Convierte el DataFrame de métricas en texto estructurado
@@ -117,9 +118,9 @@ class MetricsCalculator:
             lineas.append(f"  CPSQL     : ${fila.get('cpsql', 0):,.0f}")
             lineas.append(f"  CPA       : ${fila.get('cpa', 0):,.0f}")
             lineas.append(f"  ROAS      : {fila.get('roas', 0):.2f}")
-            lineas.append(f"  Tasa MQL  : {fila.get('tasa_mql', 0):.1%}")
-            lineas.append(f"  Tasa SQL  : {fila.get('tasa_sql', 0):.1%}")
-            lineas.append(f"  Tasa Venta: {fila.get('tasa_venta', 0):.1%}")
+            lineas.append(f"  Tasa MQL  : {fila.get('tasa_mql', 0):.1%}{' ⚠️ muestra pequeña — tasa no confiable' if _muestra_pequena else ''}")
+            lineas.append(f"  Tasa SQL  : {fila.get('tasa_sql', 0):.1%}{' ⚠️ muestra pequeña — tasa no confiable' if _muestra_pequena else ''}")
+            lineas.append(f"  Tasa Venta: {fila.get('tasa_venta', 0):.1%}{' ⚠️ muestra pequeña — tasa no confiable' if _muestra_pequena else ''}")
             lineas.append(f"  ICL       : {fila.get('icl', 0):.4f}")
 
         lineas.append("\n" + "─" * 50)
@@ -226,7 +227,7 @@ class MetricsCalculator:
         return "\n".join(lineas)
 
 
-    def resumen_ejecutivo_llm(self, df_raw: pd.DataFrame) -> str:
+    def resumen_ejecutivo_llm(self, df_raw: pd.DataFrame, _muestra_pequena: bool = False) -> str:
         """
         Resumen ejecutivo comprimido para el LLM — máximo ~1500 chars / ~375 tokens.
 
@@ -254,9 +255,25 @@ class MetricsCalculator:
         if col_estado in df_raw.columns:
             estados = df_raw[col_estado].dropna().str.lower().str.strip()
             # Normalizar variantes sucias
-            NORM = {"lead": "lead", "leads": "lead", "mql": "mql",
-                    "sql": "sql", "venta": "venta", "ventas": "venta",
-                    "sold": "venta", "perdido": "perdido", "perdidos": "perdido"}
+            # Base canonical mapping (always applies)
+            NORM_BASE = {
+                "lead": "lead", "leads": "lead",
+                "mql": "mql",
+                "sql": "sql",
+                "venta": "venta", "ventas": "venta", "sold": "venta",
+                "perdido": "perdido", "perdidos": "perdido",
+            }
+            # Dynamic extension from config — maps the real client value
+            estado_venta_config = self.config.get("estado_venta", "venta").lower().strip()
+            estado_mql_config   = self.config.get("estado_mql",   "mql").lower().strip()
+            estado_sql_config   = self.config.get("estado_sql",   "sql").lower().strip()
+
+            NORM = {
+                **NORM_BASE,
+                estado_venta_config: "venta",
+                estado_mql_config:   "mql",
+                estado_sql_config:   "sql",
+            }
             estados_norm = estados.map(lambda x: NORM.get(x, x))
             conteo = estados_norm.value_counts()
             n_nulos = df_raw[col_estado].isna().sum()
@@ -274,7 +291,9 @@ class MetricsCalculator:
             total_leads = conteo.get("lead", 0)
             total_ventas = conteo.get("venta", 0)
             if total_leads > 0:
-                lineas.append(f"  Tasa conversión global: {total_ventas/total_leads:.1%}")
+                tasa_global = f"{total_ventas/total_leads:.1%}"
+                warning = f" ⚠️ muestra pequeña (n={total_leads}) — tasa no confiable" if _muestra_pequena else ""
+                lineas.append(f"  Tasa conversión global: {tasa_global}{warning}")
 
         # ── Por campaña ───────────────────────────────────────
         if col_camp in df_raw.columns and col_estado in df_raw.columns:
@@ -289,7 +308,8 @@ class MetricsCalculator:
                     n_leads  = (estados_sub == "lead").sum()
                     n_ventas = (estados_sub == "venta").sum()
                     tasa = f"{n_ventas/n_total:.1%}" if n_total > 0 else "0%"
-                    lineas.append(f"  {camp}: {n_total} reg | leads:{n_leads} ventas:{n_ventas} tasa:{tasa}")
+                    warning = f" ⚠️ muestra pequeña (n={n_total}) — tasa no confiable" if _muestra_pequena else ""
+                    lineas.append(f"  {camp}: {n_total} reg | leads:{n_leads} ventas:{n_ventas} tasa:{tasa}{warning}")
                 else:
                     lineas.append(f"  {camp}: {n_total} registros")
             n_sin_camp = df_raw[col_camp].isna().sum()
