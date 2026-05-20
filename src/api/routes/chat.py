@@ -20,7 +20,7 @@ def _strip_rich(text: str) -> str:
 from src.api.state import state
 from src.api.limiter import limiter
 from src.processing.query_engine import ejecutar_query_analitica
-from src.api.command_bridge import despachar_comando
+from src.api.command_bridge import despachar_comando, bridge_metricas
 from src.processing.data_quality import DataQualityReport
 from src.processing.data_cleaner import CleaningSession
 
@@ -157,7 +157,7 @@ def _save_and_return(analysis_id: str, bot: dict) -> dict:
 # Formato: "/cmd": { "fn": función, "args": lambda df, partes: [...] }
 # partes = text.split() — para comandos con argumentos como /embudo Campaña_X
 
-def _build_registry(df, partes: list) -> dict:
+def _build_registry(df, partes: list, analysis_id: str = "") -> dict:
     """
     Construye el registro de comandos con el df y partes actuales.
     Se llama en runtime para tener df y args frescos.
@@ -195,6 +195,7 @@ def _build_registry(df, partes: list) -> dict:
         "/unicos":        lambda: capturar_cmd(cmd_unicos,        df, col_arg),
         "/rango":         lambda: capturar_cmd(cmd_rango,         df, col_arg),
         "/top":           lambda: capturar_cmd(cmd_top,           df, top_col, top_n),
+        "/metricas":      lambda: (None, bridge_metricas(df, state.semantic_schemas.get(analysis_id), " ".join(partes[1:]) if len(partes) > 1 else "")),
     }
 
 
@@ -532,83 +533,6 @@ async def send_message(request: Request, payload: ChatMessage):
                 note      = "Estado del engine",
             ))
 
-        # /metricas — retorna DataTable estructurada directo, sin LLM
-        if cmd_base == "/metricas" and df is not None:
-            try:
-                from src.processing.metrics import MetricsCalculator, CONFIG_DEFAULT
-
-                # Auto-detectar columna de campaña
-                col_campana = None
-                for col in df.columns:
-                    col_n = col.lower()
-                    if any(p in col_n for p in ["campana", "campaign", "utm_campaign"]):
-                        col_campana = col
-                        break
-                col_campana = col_campana or df.columns[0]
-
-                # Auto-detectar columna de estado
-                col_estado = None
-                for col in df.columns:
-                    col_n = col.lower()
-                    if any(p in col_n for p in ["estado", "status", "stage", "funnel_stage"]):
-                        col_estado = col
-                        break
-
-                # Normalizar valores de estado al vocabulario estándar
-                # ValueMapper mapea closed_won→venta, qualified→mql, etc.
-                estado_mql   = "mql"
-                estado_sql   = "sql"
-                estado_venta = "venta"
-
-                if col_estado:
-                    from src.processing.value_mapper import ValueMapper
-                    vm = ValueMapper()
-                    df, _ = vm.normalizar_estados(df, col_estado)
-                    # Tras normalizar, los valores ya son mql/sql/venta/lead/perdido
-
-                # Construir config con todas las columnas reales detectadas
-                config_auto = {
-                    **CONFIG_DEFAULT,
-                    "col_campana":   col_campana,
-                    "col_estado":    col_estado or CONFIG_DEFAULT.get("col_estado"),
-                    "estado_mql":    estado_mql,
-                    "estado_sql":    estado_sql,
-                    "estado_venta":  estado_venta,
-                }
-                calc  = MetricsCalculator(config=config_auto)
-                metr  = calc.calcular(df, nivel="campana")
-
-                # Contexto para el engine (para preguntas de seguimiento)
-                resumen = calc.resumen_para_llm(metr, nivel="campana")
-                engine.agregar_contexto_comando("/metricas", resumen)
-
-                # Construir tabla estructurada directo — sin LLM
-                col_grupo = calc._col("campana")
-                tabla = []
-                for _, fila in metr.iterrows():
-                    tabla.append({
-                        "Campaña":   str(fila.get(col_grupo, "—")),
-                        "Leads":     int(fila.get("total_leads", 0)),
-                        "MQL":       int(fila.get("total_mql", 0)),
-                        "CPL":       f"${fila.get('cpl', 0):,.0f}",
-                        "CPMQL":     f"${fila.get('cpmql', 0):,.0f}",
-                        "ROAS":      f"{fila.get('roas', 0):.2f}",
-                        "Tasa Venta": f"{fila.get('tasa_venta', 0):.1%}",
-                    })
-
-                return _save_and_return(analysis_id, _bot_msg(
-                    content   = f"Métricas por campaña — columna detectada: `{col_campana}`",
-                    freshness = "datos locales",
-                    note      = "Resultado directo del análisis",
-                    table     = tabla,
-                ))
-            except Exception as e:
-                print(f"[chat] Error /metricas: {e}")
-                return _save_and_return(analysis_id, _bot_msg(
-                    content    = f"⚠️ Error ejecutando /metricas: {e}",
-                    confidence = 0.5,
-                ))
-
         # /alertas — lee el DataQualityReport pre-calculado al cargar
         # Si por alguna razón no existe, lo calcula ahora (fallback)
         if cmd_base == "/alertas" and df is not None:
@@ -677,7 +601,7 @@ async def send_message(request: Request, payload: ChatMessage):
 
         # ── Registry universal — todos los demás comandos ─────────────────────
         if df is not None:
-            registry = _build_registry(df, partes)
+            registry = _build_registry(df, partes, analysis_id)
             if cmd_base in registry:
                 try:
                     output, ctx = registry[cmd_base]()

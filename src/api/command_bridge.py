@@ -662,7 +662,7 @@ def _despachar_modelo(cmd: str, partes: list, df, engine) -> dict:
             ctx = cmd_embudo(df, col_campana)
         elif cmd == "/velocidad":
             ctx = cmd_velocidad(df)
-        elif cmd in {"/metricas", "/alertas"}:
+        elif cmd == "/alertas":
             return {"resultado": None, "df_nuevo": df, "es_comando": False}
     except Exception as e:
         return {
@@ -943,3 +943,297 @@ def bridge_modelo_guardar_key(api_key: str, pending: dict) -> dict:
             "mensaje": f"❌ No pude guardar la key: {e}",
             "nuevo_modelo": None,
         }
+
+
+# ── /metricas — selector dinámico de dimensiones ────────────────────────────
+
+import numpy as np
+
+
+def _detectar_dimensiones(df: pd.DataFrame, schema=None) -> dict:
+    """
+    Detecta dinámicamente las dimensiones disponibles para agrupar métricas.
+    Sin hardcodeo — usa el SemanticSchema + heurísticas sobre el df real.
+
+    Retorna dict con:
+      "categoricas": [(nombre_display, col_real), ...]
+      "temporales":  [(nombre_display, granularidad), ...]  — si hay col_date
+      "col_date":    nombre real de la columna de fecha (o None)
+      "col_estado":  nombre real de la columna de estado (o None)
+      "col_valor":   nombre real de la columna de valor (o None)
+      "col_inversion": nombre real de la columna de inversión (o None)
+    """
+    categoricas   = []
+    temporales    = []
+    col_date      = None
+    col_estado    = None
+    col_valor     = None
+    col_inversion = None
+
+    # ── Desde SemanticSchema (confiable) ─────────────────────────────────────
+    if schema:
+        col_date      = schema.col_date      if schema.col_date      and schema.col_date      in df.columns else None
+        col_estado    = schema.col_estado    if schema.col_estado    and schema.col_estado    in df.columns else None
+        col_valor     = schema.col_valor     if schema.col_valor     and schema.col_valor     in df.columns else None
+        col_inversion = schema.col_inversion if schema.col_inversion and schema.col_inversion in df.columns else None
+
+        campos_categoricos = [
+            ("col_campana", "Campaña"),
+            ("col_adset",   "Adset"),
+            ("col_ad",      "Anuncio"),
+        ]
+        for campo, display in campos_categoricos:
+            col_real = getattr(schema, campo, None)
+            if col_real and col_real in df.columns:
+                n_unicos = df[col_real].nunique()
+                if 1 < n_unicos <= 500:
+                    categoricas.append((display, col_real))
+
+        if col_estado:
+            n_unicos = df[col_estado].nunique()
+            if n_unicos <= 20:
+                categoricas.append(("Estado/Stage", col_estado))
+
+    # ── Fallback: heurísticas sobre el df si no hay schema ───────────────────
+    if not categoricas and not col_date:
+        for col in df.columns:
+            col_l    = col.lower()
+            dtype    = df[col].dtype
+            n_unicos = df[col].nunique()
+
+            if col_date is None and ("fecha" in col_l or "date" in col_l or "created" in col_l):
+                col_date = col
+
+            if dtype == object and 1 < n_unicos <= 100:
+                if any(p in col_l for p in ["campana", "campaign", "adset", "ad", "fuente", "source", "estado", "stage", "canal"]):
+                    categoricas.append((col, col))
+
+    # ── Dimensiones temporales si hay col_date ────────────────────────────────
+    if col_date:
+        temporales = [
+            ("Por mes",       "mes"),
+            ("Por semana",    "semana"),
+            ("Por trimestre", "trimestre"),
+            ("Por año",       "ano"),
+        ]
+
+    return {
+        "categoricas":   categoricas,
+        "temporales":    temporales,
+        "col_date":      col_date,
+        "col_estado":    col_estado,
+        "col_valor":     col_valor,
+        "col_inversion": col_inversion,
+    }
+
+
+def _calcular_metricas_por_dimension(
+    df: pd.DataFrame,
+    col_grupo: str,
+    col_estado,
+    col_inversion,
+    col_valor,
+    granularidad_temporal=None,
+    col_date=None,
+    schema=None,
+) -> str:
+    """
+    Calcula métricas agrupando por la dimensión elegida.
+    Agnóstico — funciona con cualquier columna categórica o temporal.
+    """
+    df = df.copy()
+
+    # ── Agrupación temporal ───────────────────────────────────────────────────
+    col_agrupacion = col_grupo
+    if granularidad_temporal and col_date and col_date in df.columns:
+        try:
+            df["_fecha_dt"] = pd.to_datetime(df[col_date], errors="coerce")
+            if granularidad_temporal == "mes":
+                df["_grupo"] = df["_fecha_dt"].dt.to_period("M").astype(str)
+            elif granularidad_temporal == "semana":
+                df["_grupo"] = df["_fecha_dt"].dt.to_period("W").astype(str)
+            elif granularidad_temporal == "trimestre":
+                df["_grupo"] = df["_fecha_dt"].dt.to_period("Q").astype(str)
+            elif granularidad_temporal == "ano":
+                df["_grupo"] = df["_fecha_dt"].dt.year.astype(str)
+            col_agrupacion = "_grupo"
+        except Exception:
+            pass
+
+    if col_agrupacion not in df.columns:
+        return f"⚠️ Columna `{col_agrupacion}` no encontrada en el dataset."
+
+    df_valido = df[df[col_agrupacion].notna()].copy()
+    if df_valido.empty:
+        return f"⚠️ No hay datos para agrupar por `{col_agrupacion}`."
+
+    # ── Detectar stages de venta desde schema o heurística ───────────────────
+    estados_venta = set()
+    if schema and hasattr(schema, "value_map_stages") and schema.value_map_stages:
+        # El df ya tiene valores CANÓNICOS (el normalizer los convirtió)
+        # Buscar todas las etiquetas canónicas que representan venta
+        canonicos_venta = {
+            canonico
+            for canonico in schema.value_map_stages.values()
+            if canonico == "venta"
+        }
+        if canonicos_venta:
+            estados_venta = {"venta"}
+    if not estados_venta:
+        estados_venta = {"venta", "cerrado ganado", "closed won", "ganado", "won", "venta cerrada"}
+
+    # ── Calcular métricas por grupo ───────────────────────────────────────────
+    rows  = []
+    grupos = df_valido.groupby(col_agrupacion)
+
+    for nombre, grupo in grupos:
+        n_leads = len(grupo)
+
+        n_ventas = 0
+        if col_estado and col_estado in grupo.columns:
+            estados_lower = grupo[col_estado].astype(str).str.lower().str.strip()
+            n_ventas = estados_lower.isin({e.lower() for e in estados_venta}).sum()
+
+        tasa = f"{n_ventas/n_leads:.1%}" if n_leads >= 5 else "— (n<5)"
+
+        inversion = 0
+        if col_inversion and col_inversion in grupo.columns:
+            try:
+                inversion = pd.to_numeric(
+                    grupo[col_inversion].astype(str).str.replace(r"[$,\s]", "", regex=True),
+                    errors="coerce"
+                ).fillna(0).sum()
+            except Exception:
+                pass
+
+        ingreso = 0
+        if col_valor and col_valor in grupo.columns:
+            try:
+                ingreso = pd.to_numeric(
+                    grupo[col_valor].astype(str).str.replace(r"[$,\s]", "", regex=True),
+                    errors="coerce"
+                ).fillna(0).sum()
+            except Exception:
+                pass
+
+        cpl  = f"${inversion/n_leads:,.0f}"   if n_leads  > 0 and inversion > 0 else "—"
+        cpa  = f"${inversion/n_ventas:,.0f}"  if n_ventas > 0 and inversion > 0 else "—"
+        roas = f"{ingreso/inversion:.2f}x"    if inversion > 0 and ingreso  > 0 else "—"
+
+        rows.append([str(nombre), n_leads, n_ventas, tasa, cpl, cpa, roas])
+
+    if not rows:
+        return "⚠️ Sin datos suficientes para calcular métricas."
+
+    rows.sort(key=lambda r: r[1], reverse=True)
+
+    headers = [col_agrupacion.replace("_grupo", col_grupo), "Leads", "Ventas", "Tasa", "CPL", "CPA", "ROAS"]
+    sep  = " | ".join(["---"] * len(headers))
+    head = " | ".join(headers)
+    body = "\n".join(f"| {' | '.join(str(c) for c in row)} |" for row in rows[:50])
+
+    aviso_n        = "\n\n_⚠️ Tasas marcadas con '—' tienen menos de 5 registros — no son estadísticamente confiables._" if any("n<5" in str(r) for r in rows) else ""
+    aviso_truncado = f"\n\n_Mostrando top 50 de {len(rows)} grupos._" if len(rows) > 50 else ""
+
+    return f"## Métricas por {headers[0]}\n\n| {head} |\n| {sep} |\n{body}{aviso_n}{aviso_truncado}"
+
+
+def bridge_metricas(df: pd.DataFrame, schema=None, dimension: str = "") -> str:
+    """
+    Comando /metricas con selector dinámico de dimensiones.
+
+    Sin hardcodeo — detecta las dimensiones disponibles desde el SemanticSchema
+    y el contenido real del df. El usuario elige por cuál agrupar.
+
+    Args:
+        df:        DataFrame activo
+        schema:    SemanticSchema de la sesión (puede ser None)
+        dimension: dimensión elegida por el usuario (vacío = mostrar selector)
+
+    Returns:
+        str markdown con el selector o con las métricas calculadas
+    """
+    if df is None or df.empty:
+        return "⚠️ Sin datos activos. Carga un dataset primero."
+
+    dims          = _detectar_dimensiones(df, schema)
+    categoricas   = dims["categoricas"]
+    temporales    = dims["temporales"]
+    col_date      = dims["col_date"]
+    col_estado    = dims["col_estado"]
+    col_valor     = dims["col_valor"]
+    col_inversion = dims["col_inversion"]
+
+    # ── Sin dimensión especificada → mostrar selector ─────────────────────────
+    if not dimension:
+        if not categoricas and not temporales:
+            return (
+                "⚠️ No se detectaron dimensiones para agrupar métricas.\n\n"
+                "El dataset necesita al menos una columna categórica "
+                "(campaña, adset, anuncio, fuente) o una columna de fecha.\n\n"
+                "_Tip: `/columnas` para ver el schema completo._"
+            )
+
+        lineas  = ["## ¿Por qué dimensión quieres ver las métricas?\n"]
+        i = 1
+
+        for display, col_real in categoricas:
+            n_unicos = df[col_real].nunique()
+            lineas.append(f"**{i}.** {display} — `{col_real}` ({n_unicos} valores únicos)")
+            i += 1
+
+        for display, granularidad in temporales:
+            lineas.append(f"**{i}.** {display}")
+            i += 1
+
+        lineas.append(f"\n_Escribe `/metricas [número]` para ver las métricas. Ej: `/metricas 1`_")
+        return "\n".join(lineas)
+
+    # ── Dimensión especificada → calcular ─────────────────────────────────────
+    opciones_map = {}
+    i = 1
+    for display, col_real in categoricas:
+        opciones_map[str(i)]           = (col_real, None, None)
+        opciones_map[display.lower()]  = (col_real, None, None)
+        opciones_map[col_real.lower()] = (col_real, None, None)
+        i += 1
+
+    for display, granularidad in temporales:
+        opciones_map[str(i)]          = (col_date, granularidad, col_date)
+        opciones_map[granularidad]    = (col_date, granularidad, col_date)
+        opciones_map[display.lower()] = (col_date, granularidad, col_date)
+        i += 1
+
+    dim_lower = dimension.strip().lower()
+
+    if dim_lower not in opciones_map:
+        col_fuzzy = None
+        for col in df.columns:
+            if dim_lower in col.lower() or col.lower() in dim_lower:
+                col_fuzzy = col
+                break
+
+        if col_fuzzy:
+            return _calcular_metricas_por_dimension(
+                df, col_fuzzy, col_estado, col_inversion, col_valor, schema=schema
+            )
+
+        opciones_str = ", ".join(f"`{k}`" for k in opciones_map if not k.isdigit())
+        return (
+            f"⚠️ Dimensión `{dimension}` no reconocida.\n\n"
+            f"Disponibles: {opciones_str}\n\n"
+            f"_O escribe `/metricas` para ver el selector completo._"
+        )
+
+    col_real, granularidad, col_date_used = opciones_map[dim_lower]
+
+    return _calcular_metricas_por_dimension(
+        df,
+        col_grupo=col_real,
+        col_estado=col_estado,
+        col_inversion=col_inversion,
+        col_valor=col_valor,
+        granularidad_temporal=granularidad,
+        col_date=col_date_used,
+        schema=schema,
+    )
