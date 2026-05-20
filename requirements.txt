@@ -1,4 +1,5 @@
 rapidfuzz>=3.0.0
+sentence-transformers==5.5.0
 
 # Datos
 pandas==2.1.4
