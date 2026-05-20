@@ -29,7 +29,12 @@ Filosofía:
 
 Uso:
     from src.processing.ingestion_normalizer import normalizar
+
+    # Sin schema (backward compat — usa heurísticas de nombre)
     df_limpio, reporte = normalizar(df)
+
+    # Con schema del SemanticInferencer (recomendado)
+    df_limpio, reporte = normalizar(df, schema=semantic_schema)
 
     # Solo análisis estructural sin modificar el df:
     from src.processing.ingestion_normalizer import analizar_estructura
@@ -40,7 +45,10 @@ import pandas as pd
 import numpy as np
 import re
 
-from typing import Tuple
+from typing import Tuple, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.processing.semantic_inferencer import SemanticSchema
 
 try:
     from src.ingestion.attribution_parser import parsear_todas_atribuciones, reporte_atribucion
@@ -54,7 +62,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Vocabulario de stages
+# Vocabulario de stages — solo como fallback si no hay SemanticSchema
 # ---------------------------------------------------------------------------
 
 STAGE_MAP = {
@@ -87,10 +95,40 @@ _NULOS_STRING = {"none", "null", "n/a", "na", "-", "nan", ""}
 # ===========================================================================
 
 def _encontrar_col(df: pd.DataFrame, nombre: str) -> str | None:
+    """Busca columna por nombre exacto (case-insensitive). Fallback cuando no hay schema."""
     nombre_limpio = nombre.strip().lower()
     for col in df.columns:
         if col.strip().lower() == nombre_limpio:
             return col
+    return None
+
+
+def _resolver_col(df: pd.DataFrame, schema_col: Optional[str], *fallback_nombres: str) -> Optional[str]:
+    """
+    Resuelve el nombre real de una columna en el df.
+
+    Orden de prioridad:
+      1. schema_col — columna detectada por SemanticInferencer (confiable)
+      2. fallback_nombres — nombres hardcodeados como último recurso
+
+    Args:
+        df:              DataFrame con las columnas reales
+        schema_col:      nombre detectado por SemanticInferencer (puede ser None)
+        *fallback_nombres: nombres alternativos si el schema no detectó nada
+
+    Returns:
+        nombre de columna existente en df, o None si no se encuentra nada
+    """
+    # Primero: schema semántico
+    if schema_col and schema_col in df.columns:
+        return schema_col
+
+    # Fallback: búsqueda por nombre hardcodeado (backward compat)
+    for nombre in fallback_nombres:
+        col = _encontrar_col(df, nombre)
+        if col:
+            return col
+
     return None
 
 
@@ -114,8 +152,8 @@ def _normalizar_nulos_string(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
 
 _EMAIL_VALIDO = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
 
-def _detectar_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    col = _encontrar_col(df, "correo")
+def _detectar_emails(df: pd.DataFrame, col_email: Optional[str] = None) -> Tuple[pd.DataFrame, int]:
+    col = col_email or _encontrar_col(df, "correo") or _encontrar_col(df, "email")
     if col is None:
         return df, 0
     df[col] = df[col].str.strip()
@@ -126,8 +164,8 @@ def _detectar_emails(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return df, int(es_sospechoso.sum())
 
 
-def _detectar_telefonos(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    col = _encontrar_col(df, "telefono")
+def _detectar_telefonos(df: pd.DataFrame, col_phone: Optional[str] = None) -> Tuple[pd.DataFrame, int]:
+    col = col_phone or _encontrar_col(df, "telefono") or _encontrar_col(df, "phone")
     if col is None:
         return df, 0
     df[col] = df[col].str.strip()
@@ -138,10 +176,21 @@ def _detectar_telefonos(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return df, int(sin_prefijo.sum())
 
 
-def _clasificar_duplicados(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, int]:
-    nombre_col = _encontrar_col(df, "nombre")
-    correo_col = _encontrar_col(df, "correo")
-    stage_col  = _encontrar_col(df, "stage")
+def _clasificar_duplicados(
+    df: pd.DataFrame,
+    col_nombre: Optional[str] = None,
+    col_correo: Optional[str] = None,
+    col_stage: Optional[str] = None,
+) -> Tuple[pd.DataFrame, int, int]:
+    """
+    Clasifica duplicados como 'real' (mismo contacto dos veces) o 'journey' (avanzó en funnel).
+
+    Cuando recibe columnas del SemanticSchema, no depende de nombres hardcodeados.
+    """
+    nombre_col = col_nombre or _encontrar_col(df, "nombre") or _encontrar_col(df, "name")
+    correo_col = col_correo or _encontrar_col(df, "correo") or _encontrar_col(df, "email")
+    stage_col  = col_stage  or _encontrar_col(df, "stage") or _encontrar_col(df, "estado")
+
     df["tipo_duplicado"] = None
 
     if nombre_col is None or correo_col is None:
@@ -158,7 +207,12 @@ def _clasificar_duplicados(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, int]:
         grupos = df[duplicados_mask].groupby(clave[duplicados_mask])
         for _, grupo in grupos:
             stages = grupo[stage_col].str.lower().str.strip().dropna().tolist()
-            if "duplicado" in stages or "duplicate" in stages:
+            # Detectar duplicados reales por vocabulario canónico + variantes
+            es_duplicado = any(
+                s in {"duplicado", "duplicate", "dup", "repetido", "repeated"}
+                for s in stages
+            )
+            if es_duplicado:
                 df.loc[grupo.index, "tipo_duplicado"] = "real"
                 reales += len(grupo)
             else:
@@ -168,20 +222,43 @@ def _clasificar_duplicados(df: pd.DataFrame) -> Tuple[pd.DataFrame, int, int]:
     return df, reales, journeys
 
 
-def _normalizar_stages(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
-    col = _encontrar_col(df, "stage")
+def _normalizar_stages(
+    df: pd.DataFrame,
+    col_stage: Optional[str] = None,
+    value_map: Optional[dict] = None,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Normaliza stages al vocabulario canónico.
+
+    Si recibe value_map del SemanticInferencer → lo usa (agnóstico real).
+    Si no → cae al STAGE_MAP hardcodeado (backward compat).
+    """
+    col = col_stage or _encontrar_col(df, "stage") or _encontrar_col(df, "estado")
     if col is None:
         return df, 0
 
-    def _mapear(val):
-        if pd.isna(val):
-            return val
-        clave = str(val).strip().lower()
-        return STAGE_MAP.get(clave, str(val).strip())
+    if value_map:
+        # Ruta semántica: mapeo exacto cliente → canónico, sin hardcodeo
+        def _mapear_semantico(val):
+            if pd.isna(val):
+                return val
+            val_str = str(val).strip()
+            return value_map.get(val_str, val_str)
 
-    original = df[col].copy()
-    df[col] = df[col].apply(_mapear)
-    return df, int((df[col] != original).sum())
+        original = df[col].copy()
+        df[col] = df[col].apply(_mapear_semantico)
+        return df, int((df[col] != original).sum())
+    else:
+        # Ruta fallback: STAGE_MAP hardcodeado
+        def _mapear(val):
+            if pd.isna(val):
+                return val
+            clave = str(val).strip().lower()
+            return STAGE_MAP.get(clave, str(val).strip())
+
+        original = df[col].copy()
+        df[col] = df[col].apply(_mapear)
+        return df, int((df[col] != original).sum())
 
 
 def _normalizar_titulacion(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
@@ -209,7 +286,6 @@ def _normalizar_titulacion(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
         n_lower  = (vals == vals.str.lower()).sum()
         n_mezcla = n_total - n_title - n_upper - n_lower
 
-        # Solo actuar si hay inconsistencia real
         hay_inconsistencia = (
             n_mezcla > 0 or
             (n_title > 0 and n_upper > 0 and min(n_title, n_upper) / n_total > 0.1)
@@ -291,39 +367,56 @@ def _analizar_1fn(df: pd.DataFrame) -> list[dict]:
     return hallazgos
 
 
-def _analizar_2fn(df: pd.DataFrame) -> list[dict]:
+def _analizar_2fn(df: pd.DataFrame, schema=None) -> list[dict]:
     """
     2FN: cada atributo no clave debe depender de TODA la clave.
     Si el mismo nombre de anuncio aparece en múltiples adsets → dependencia parcial.
+
+    Usa columnas del schema si están disponibles, fallback a nombres hardcodeados.
     """
     hallazgos = []
-    pares = [
+
+    # Construir pares desde schema semántico si existe
+    if schema and schema.col_ad and schema.col_adset:
+        pares_schema = [(schema.col_ad, schema.col_adset)]
+    else:
+        pares_schema = []
+
+    # Pares hardcodeados como fallback
+    pares_fallback = [
         ("ad primera atribucion",  "ad set primera atribucion"),
         ("ad segunda atribucion",  "ad set segunda atribucion"),
         ("primera_ad_attr",        "primera_adset_attr"),
         ("segunda_ad_attr",        "segunda_adset_attr"),
     ]
 
-    for col_det, col_dep in pares:
-        c_det = _encontrar_col(df, col_det)
-        c_dep = _encontrar_col(df, col_dep)
-        if c_det is None or c_dep is None:
+    pares_a_evaluar = pares_schema if pares_schema else [
+        (c_det, c_dep)
+        for c_det, c_dep in pares_fallback
+        if _encontrar_col(df, c_det) and _encontrar_col(df, c_dep)
+    ]
+
+    for c_det, c_dep in pares_a_evaluar:
+        # Resolver nombre real en df
+        col_det = c_det if c_det in df.columns else _encontrar_col(df, c_det)
+        col_dep = c_dep if c_dep in df.columns else _encontrar_col(df, c_dep)
+        if col_det is None or col_dep is None:
             continue
 
-        sub = df[[c_det, c_dep]].dropna()
+        sub = df[[col_det, col_dep]].dropna()
         if len(sub) == 0:
             continue
 
-        mapping       = sub.groupby(c_det)[c_dep].nunique()
+        mapping        = sub.groupby(col_det)[col_dep].nunique()
         inconsistentes = mapping[mapping > 1]
 
         if len(inconsistentes) > 0:
             pct = round(len(inconsistentes) / len(mapping) * 100, 1)
             ejemplo_ad = inconsistentes.index[0]
-            adsets = sub[sub[c_det] == ejemplo_ad][c_dep].unique()[:3].tolist()
+            adsets = sub[sub[col_det] == ejemplo_ad][col_dep].unique()[:3].tolist()
             hallazgos.append({
                 "forma": "2FN",
-                "columna": f"{c_det} → {c_dep}",
+                "columna": f"{col_det} → {col_dep}",
                 "n": int(len(inconsistentes)),
                 "pct": pct,
                 "severidad": "media",
@@ -342,10 +435,12 @@ def _analizar_2fn(df: pd.DataFrame) -> list[dict]:
     return hallazgos
 
 
-def _analizar_3fn(df: pd.DataFrame) -> list[dict]:
+def _analizar_3fn(df: pd.DataFrame, schema=None) -> list[dict]:
     """
     3FN: ningún atributo no clave debe depender transitivamente de la clave.
     Detecta entidades mezcladas y inconsistencias de identidad del contacto.
+
+    Usa columnas del schema si están disponibles.
     """
     hallazgos = []
 
@@ -362,9 +457,10 @@ def _analizar_3fn(df: pd.DataFrame) -> list[dict]:
     entidades_presentes = {k: v for k, v in entidades_presentes.items() if v}
 
     if len(entidades_presentes) >= 2:
-        correo_col = _encontrar_col(df, "correo")
-        stage_col  = _encontrar_col(df, "stage")
-        if correo_col and stage_col:
+        correo_col = (schema.col_email if schema else None) or _encontrar_col(df, "correo") or _encontrar_col(df, "email")
+        stage_col  = (schema.col_estado if schema else None) or _encontrar_col(df, "stage") or _encontrar_col(df, "estado")
+
+        if correo_col and stage_col and correo_col in df.columns and stage_col in df.columns:
             correo_stages = df.groupby(correo_col)[stage_col].nunique()
             multi = correo_stages[correo_stages > 1]
             if len(multi) > 0:
@@ -387,10 +483,10 @@ def _analizar_3fn(df: pd.DataFrame) -> list[dict]:
                     ),
                 })
 
-    # Inconsistencia correo ↔ nombre
-    correo_col = _encontrar_col(df, "correo")
-    nombre_col = _encontrar_col(df, "nombre")
-    if correo_col and nombre_col:
+    correo_col = (schema.col_email if schema else None) or _encontrar_col(df, "correo") or _encontrar_col(df, "email")
+    nombre_col = (schema.col_name  if schema else None) or _encontrar_col(df, "nombre") or _encontrar_col(df, "name")
+
+    if correo_col and nombre_col and correo_col in df.columns and nombre_col in df.columns:
         multi_nombres = df.groupby(correo_col)[nombre_col].nunique()
         multi_nombres = multi_nombres[multi_nombres > 1]
         if len(multi_nombres) > 0:
@@ -413,20 +509,27 @@ def _analizar_3fn(df: pd.DataFrame) -> list[dict]:
     return hallazgos
 
 
-def _analizar_4fn(df: pd.DataFrame) -> list[dict]:
+def _analizar_4fn(df: pd.DataFrame, schema=None) -> list[dict]:
     """
     4FN: no debe haber dependencias multivaluadas independientes en la misma tabla.
-    Primera y segunda atribución son hechos independientes → deberían estar en filas separadas.
+    Primera y segunda atribución son hechos independientes.
+
+    Usa attribution_columns del schema si están disponibles.
     """
     hallazgos = []
 
-    col_primera = _encontrar_col(df, "ad primera atribucion")
-    col_segunda = _encontrar_col(df, "ad segunda atribucion")
+    # Si el schema detectó columnas de atribución semánticamente, usarlas
+    if schema and schema.attribution_columns and len(schema.attribution_columns) >= 2:
+        col_primera = schema.attribution_columns[0] if schema.attribution_columns[0] in df.columns else None
+        col_segunda = schema.attribution_columns[1] if len(schema.attribution_columns) > 1 and schema.attribution_columns[1] in df.columns else None
+    else:
+        col_primera = _encontrar_col(df, "ad primera atribucion")
+        col_segunda = _encontrar_col(df, "ad segunda atribucion")
 
     if col_primera is None or col_segunda is None:
         return hallazgos
 
-    ambas  = df[[col_primera, col_segunda]].dropna()
+    ambas   = df[[col_primera, col_segunda]].dropna()
     n_ambas = len(ambas)
 
     if n_ambas > 0:
@@ -452,18 +555,22 @@ def _analizar_4fn(df: pd.DataFrame) -> list[dict]:
     return hallazgos
 
 
-def analizar_estructura(df: pd.DataFrame) -> dict:
+def analizar_estructura(df: pd.DataFrame, schema=None) -> dict:
     """
     Análisis completo de formas normales 1FN→4FN sin modificar el df.
     Retorna dict con hallazgos por forma + resumen ejecutivo en lenguaje de negocio.
+
+    Args:
+        df:     DataFrame ya con columnas stripeadas
+        schema: SemanticSchema opcional — mejora detección en 2FN, 3FN, 4FN
     """
     df = df.copy()
     df = _limpiar_nombres_columnas(df)
 
     h1 = _analizar_1fn(df)
-    h2 = _analizar_2fn(df)
-    h3 = _analizar_3fn(df)
-    h4 = _analizar_4fn(df)
+    h2 = _analizar_2fn(df, schema=schema)
+    h3 = _analizar_3fn(df, schema=schema)
+    h4 = _analizar_4fn(df, schema=schema)
 
     todos        = h1 + h2 + h3 + h4
     altas        = [h for h in todos if h["severidad"] == "alta"]
@@ -499,9 +606,15 @@ def analizar_estructura(df: pd.DataFrame) -> dict:
 # SECCIÓN 3 — FUNCIÓN PRINCIPAL
 # ===========================================================================
 
-def normalizar(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
+def normalizar(df: pd.DataFrame, schema=None) -> Tuple[pd.DataFrame, dict]:
     """
     Pipeline completo: limpieza básica + análisis estructural 1FN→4FN.
+
+    Args:
+        df:     DataFrame crudo del cliente
+        schema: SemanticSchema del SemanticInferencer (opcional pero recomendado).
+                Cuando está presente, los helpers usan columnas detectadas semánticamente
+                en lugar de nombres hardcodeados. Backward compatible: funciona sin schema.
 
     Returns:
         (df_normalizado, reporte)
@@ -525,21 +638,33 @@ def normalizar(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
             f"Adly los convirtió a vacíos reales."
         )
 
-    df, n_emails = _detectar_emails(df)
+    # Usar columnas del schema cuando están disponibles
+    col_email = schema.col_email if schema else None
+    col_phone = schema.col_phone if schema else None
+    col_name  = schema.col_name  if schema else None
+    col_estado = schema.col_estado if schema else None
+    value_map  = schema.value_map_stages if schema else None
+
+    df, n_emails = _detectar_emails(df, col_email=col_email)
     if n_emails > 0:
         reporte["problemas"].append(
             f"{n_emails} correos tienen caracteres inválidos (tildes, espacios, @ doble). "
             f"Pueden fallar si intentas enviarles un email — revísalos antes de una campaña."
         )
 
-    df, n_tel = _detectar_telefonos(df)
+    df, n_tel = _detectar_telefonos(df, col_phone=col_phone)
     if n_tel > 0:
         reporte["problemas"].append(
             f"{n_tel} teléfonos no tienen código de país (+1, +52, etc.). "
             f"Sin esto no puedes saber de qué país es el lead ni hacer llamadas internacionales."
         )
 
-    df, n_reales, n_journeys = _clasificar_duplicados(df)
+    df, n_reales, n_journeys = _clasificar_duplicados(
+        df,
+        col_nombre=col_name,
+        col_correo=col_email,
+        col_stage=col_estado,
+    )
     if n_reales > 0:
         reporte["problemas"].append(
             f"{n_reales} leads están marcados como duplicados reales — "
@@ -550,11 +675,15 @@ def normalizar(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
             f"{n_journeys} leads aparecen varias veces porque avanzaron por el funnel. Eso es normal."
         )
 
-    df, n_stages = _normalizar_stages(df)
+    df, n_stages = _normalizar_stages(df, col_stage=col_estado, value_map=value_map)
     if n_stages > 0:
         reporte["info"].append(
-            f"{n_stages} stages unificados al mismo vocabulario (ej: 'Closed Won' → 'Cerrado Ganado')."
+            f"{n_stages} stages unificados al vocabulario canónico de Adly."
         )
+
+    df, variantes = _unificar_variantes_categoricas(df)
+    for col, info in variantes.items():
+        reporte["info"].append(info["mensaje"])
 
     df, titulacion = _normalizar_titulacion(df)
     for col, info in titulacion.items():
@@ -572,9 +701,8 @@ def normalizar(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
             "attribution_parser no disponible — columnas de atribución no fueron expandidas."
         )
 
-    # Análisis estructural — corre sobre df ya limpio
-    reporte["estructura"] = analizar_estructura(df)
-    # Solo agregar al reporte principal los problemas de alta y media severidad
+    # Análisis estructural — pasa el schema para que 2FN/3FN/4FN usen columnas detectadas
+    reporte["estructura"] = analizar_estructura(df, schema=schema)
     reporte["problemas"].extend(reporte["estructura"]["problemas_negocio"])
 
     total_problemas = len(reporte["problemas"])
@@ -593,9 +721,9 @@ def normalizar(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
 # SECCIÓN 4 — UTILIDADES
 # ===========================================================================
 
-def diagnostico_rapido(df: pd.DataFrame) -> str:
+def diagnostico_rapido(df: pd.DataFrame, schema=None) -> str:
     """Reporte compacto para CLI/chat. No modifica el df."""
-    _, reporte = normalizar(df)
+    _, reporte = normalizar(df, schema=schema)
     lineas = [reporte["resumen"], ""]
 
     if reporte["problemas"]:
@@ -617,3 +745,110 @@ def diagnostico_rapido(df: pd.DataFrame) -> str:
             lineas.append(f"   • {s}")
 
     return "\n".join(lineas)
+
+
+# ===========================================================================
+# SECCIÓN 5 — UNIFICACIÓN DE VARIANTES CATEGÓRICAS
+# ===========================================================================
+
+def _normalizar_clave(valor: str) -> str:
+    """
+    Convierte cualquier string a su forma canónica de comparación.
+    Regla: lowercase + strip + reemplazar [_, -, .] por espacio + colapsar espacios múltiples.
+
+    Ejemplos:
+        "Reel_IA"   → "reel ia"
+        "REEL IA"   → "reel ia"
+        "reel-ia"   → "reel ia"
+        "Reel  IA"  → "reel ia"
+    """
+    s = str(valor).strip().lower()
+    s = re.sub(r"[_\-\.]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _unificar_variantes_categoricas(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
+    """
+    Unifica variantes del mismo valor categórico en todas las columnas object.
+    Sin hardcodeo — aplica la misma regla agnóstica a cualquier columna.
+
+    Lógica:
+        1. Para cada columna object, calcular la clave canónica de cada valor
+        2. Agrupar valores que colapsan a la misma clave
+        3. El canónico es el valor más frecuente del grupo
+        4. Reemplazar todas las variantes por el canónico
+
+    Ejemplos que resuelve:
+        "Reel IA", "reel ia", "Reel_IA"  → el más frecuente (ej: "Reel IA")
+        "WEBINAR IA 2026", "webinar ia 2026" → "WEBINAR IA 2026" (si es más frecuente)
+        "Closed Won", "closed_won", "CLOSED WON" → el más frecuente
+
+    No toca:
+        - Columnas de email (tienen formato propio)
+        - Columnas de fecha
+        - Columnas con todos los valores únicos (IDs)
+        - Valores NaN
+    """
+    resultado = {}
+    _EXCLUIR = {"correo", "email", "fecha", "date", "created", "id", "url", "phone", "telefono"}
+
+    for col in df.select_dtypes(include="object").columns:
+        # Saltar columnas que no deben tocarse
+        if any(ex in col.lower() for ex in _EXCLUIR):
+            continue
+
+        vals = df[col].dropna()
+        if len(vals) == 0:
+            continue
+
+        # No tocar columnas donde casi todos los valores son únicos (IDs o texto libre)
+        n_unicos = vals.nunique()
+        if n_unicos / len(vals) > 0.95:
+            continue
+
+        # Construir mapa: clave_canónica → {valor_original: frecuencia}
+        grupos: dict = {}
+        for val in vals:
+            clave = _normalizar_clave(val)
+            if clave not in grupos:
+                grupos[clave] = {}
+            grupos[clave][val] = grupos[clave].get(val, 0) + 1
+
+        # Solo procesar grupos que tienen más de una variante
+        grupos_con_variantes = {
+            clave: conteo
+            for clave, conteo in grupos.items()
+            if len(conteo) > 1
+        }
+
+        if not grupos_con_variantes:
+            continue
+
+        # Construir mapa de reemplazo: variante → canónico (el más frecuente)
+        mapa_reemplazo = {}
+        ejemplos = []
+        for clave, conteo in grupos_con_variantes.items():
+            canonico = max(conteo, key=conteo.get)
+            variantes = [v for v in conteo if v != canonico]
+            for variante in variantes:
+                mapa_reemplazo[variante] = canonico
+            if len(ejemplos) < 3:
+                ejemplos.append(f"'{variantes[0]}' → '{canonico}'")
+
+        # Aplicar reemplazos
+        n_reemplazos = df[col].isin(mapa_reemplazo).sum()
+        df[col] = df[col].map(lambda x: mapa_reemplazo.get(x, x) if pd.notna(x) else x)
+
+        resultado[col] = {
+            "n_grupos": len(grupos_con_variantes),
+            "n_reemplazos": int(n_reemplazos),
+            "mensaje": (
+                f"'{col}' tenía {len(grupos_con_variantes)} valores con variantes "
+                f"(mayúsculas, guiones, underscores). "
+                f"Adly unificó {n_reemplazos} registros al valor más frecuente. "
+                f"Ej: {' · '.join(ejemplos)}"
+            ),
+        }
+
+    return df, resultado

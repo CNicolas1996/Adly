@@ -614,6 +614,149 @@ class SemanticInferencer:
 
         return atribucion
 
+    # ── CAPA 2.5 — Descomposición de valores compuestos ───────────────────
+
+    _SEPARADORES = [" | ", " / ", " ; ", " > ", " & ", " + ", "|", "/", ";"]
+
+    def _detectar_separador(self, valores: list[str]) -> str | None:
+        """
+        Detecta el separador más probable en una lista de valores únicos.
+        Umbral: >20% de los valores lo contienen.
+        """
+        conteo = {sep: 0 for sep in self._SEPARADORES}
+        for val in valores:
+            for sep in self._SEPARADORES:
+                if sep in val:
+                    conteo[sep] += 1
+                    break
+        total = len(valores)
+        if total == 0:
+            return None
+        ganador = max(conteo, key=conteo.get)
+        return ganador if conteo[ganador] / total >= 0.20 else None
+
+    def _clasificar_fragmento(
+        self,
+        fragmento: str,
+        descripciones: dict,
+        embeds_descs: np.ndarray,
+    ) -> str | None:
+        """
+        Clasifica un fragmento de texto en col_campana / col_adset / col_ad
+        por similitud coseno contra las descripciones canónicas.
+        """
+        embed_frag = self._embed([fragmento])
+        scores     = self._similitud_coseno(embed_frag[0], embeds_descs)
+        idx_max    = int(np.argmax(scores))
+        score_max  = float(scores[idx_max])
+        if score_max < THRESHOLD_COLUMNAS:
+            return None
+        return list(descripciones.keys())[idx_max]
+
+    def _descomponer_compuestos(
+        self,
+        df: pd.DataFrame,
+        schema: "SemanticSchema",
+    ) -> tuple[pd.DataFrame, "SemanticSchema"]:
+        """
+        Detecta columnas categóricas con valores compuestos (pipe, slash, etc.)
+        y normaliza la columna original IN PLACE:
+          - Valores simples  → sin cambio
+          - Valores compuestos → reemplazados por el fragmento del campo canónico
+
+        Ejemplo:
+          "0% Interest Biz | Broad USA | Reel IA"  → "0% Interest Biz"
+          "0% Interest Biz"                         → "0% Interest Biz"  (intacto)
+
+        Agnóstico: detecta el separador y el campo semánticamente.
+        Solo embedea valores únicos — no itera las N filas.
+        """
+        descripciones = {
+            "col_campana": SCHEMA_CANONICO["col_campana"],
+            "col_adset":   SCHEMA_CANONICO["col_adset"],
+            "col_ad":      SCHEMA_CANONICO["col_ad"],
+        }
+        embeds_descs = self._embed(list(descripciones.values()))
+
+        # Columnas candidatas: col_campana, col_adset, col_ad + attribution_columns
+        candidatas = []
+        for campo in ["col_campana", "col_adset", "col_ad"]:
+            col = getattr(schema, campo, None)
+            if col and col in df.columns:
+                candidatas.append((col, campo))
+        for col in schema.attribution_columns:
+            if col in df.columns and col not in [c for c, _ in candidatas]:
+                candidatas.append((col, None))  # campo desconocido — inferir
+
+        for col, campo_schema in candidatas:
+            valores_unicos = (
+                df[col].dropna().astype(str).str.strip().unique().tolist()
+            )
+            if len(valores_unicos) < 2:
+                continue
+
+            separador = self._detectar_separador(valores_unicos)
+            if separador is None:
+                continue
+
+            # Solo procesar valores que contienen el separador
+            valores_compuestos = [v for v in valores_unicos if separador in v]
+            if not valores_compuestos:
+                continue
+
+            print(f"[SemanticInferencer] Compuestos en '{col}' — separador: {repr(separador)} — {len(valores_compuestos)} valores")
+
+            # Para cada valor compuesto, clasificar cada fragmento y construir mapa
+            # mapa: valor_original → fragmento_canonico_del_campo
+            mapa_reemplazo: dict[str, str] = {}
+
+            for valor in valores_compuestos:
+                fragmentos = [f.strip() for f in valor.split(separador) if f.strip()]
+                if not fragmentos:
+                    continue
+
+                # Si el campo ya está asignado en el schema, buscar fragmento de ese campo
+                if campo_schema:
+                    # Clasificar cada fragmento y buscar el que matchea campo_schema
+                    mejor_frag = None
+                    for frag in fragmentos:
+                        campo_detectado = self._clasificar_fragmento(frag, descripciones, embeds_descs)
+                        if campo_detectado == campo_schema:
+                            mejor_frag = frag
+                            break
+                    # Si no encontró match exacto, tomar el fragmento con mayor score para campo_schema
+                    if mejor_frag is None:
+                        idx_campo = list(descripciones.keys()).index(campo_schema)
+                        mejor_score = -1.0
+                        for frag in fragmentos:
+                            embed_f = self._embed([frag])
+                            scores  = self._similitud_coseno(embed_f[0], embeds_descs)
+                            if float(scores[idx_campo]) > mejor_score:
+                                mejor_score = float(scores[idx_campo])
+                                mejor_frag  = frag
+                    mapa_reemplazo[valor] = mejor_frag
+                else:
+                    # Columna de atribución sin campo asignado — tomar primer fragmento
+                    # que clasifique como col_campana
+                    for frag in fragmentos:
+                        campo_detectado = self._clasificar_fragmento(frag, descripciones, embeds_descs)
+                        if campo_detectado == "col_campana":
+                            mapa_reemplazo[valor] = frag
+                            break
+
+            if not mapa_reemplazo:
+                continue
+
+            # Aplicar reemplazos solo a valores compuestos — valores simples intactos
+            n_antes = df[col].notna().sum()
+            df[col] = df[col].apply(
+                lambda x: mapa_reemplazo.get(str(x).strip(), x) if pd.notna(x) else x
+            )
+            n_reemplazados = sum(1 for v in mapa_reemplazo.values() if v is not None)
+            print(f"[SemanticInferencer] '{col}' normalizada — {n_reemplazados} valores compuestos → fragmento canónico")
+
+        return df, schema
+
     # ── MÉTODO PRINCIPAL ───────────────────────────────────────────────────
 
     def analizar(self, df: pd.DataFrame, cache_key: str = None) -> SemanticSchema:
@@ -629,6 +772,9 @@ class SemanticInferencer:
         """
         schema   = SemanticSchema()
         warnings = []
+
+        # Trabajar sobre copia — no mutar el df original del caller
+        df = df.copy()
 
         print(f"\n[SemanticInferencer] Analizando dataset: {len(df)} filas · {len(df.columns)} columnas")
 
@@ -668,6 +814,13 @@ class SemanticInferencer:
                     f"Algunos análisis estarán limitados."
                 )
 
+        # ── Capa 2.5 — Descomposición de valores compuestos ─────────────
+        print(f"[SemanticInferencer] Capa 2.5: normalizando valores compuestos...")
+        try:
+            df, schema = self._descomponer_compuestos(df, schema)
+        except Exception as e:
+            warnings.append(f"Capa 2.5 falló ({e}) — valores compuestos no procesados")
+
         # ── Capa 3 — mapeo de stages ─────────────────────────────────────
         if schema.col_estado:
             print(f"[SemanticInferencer] Capa 3: mapeando stages en '{schema.col_estado}'...")
@@ -691,7 +844,7 @@ class SemanticInferencer:
         schema.warnings = warnings
 
         print(schema.resumen())
-        return schema
+        return df, schema
 
     def _fallback_column_mapper(self, df) -> tuple[dict, dict]:
         """
@@ -746,7 +899,7 @@ if __name__ == "__main__":
     df.columns = [c.strip() for c in df.columns]
 
     inferencer = SemanticInferencer()
-    schema     = inferencer.analizar(df)
+    df, schema = inferencer.analizar(df)
 
     print("\n>> Config para MetricsCalculator:")
     import json
