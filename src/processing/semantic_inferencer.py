@@ -338,8 +338,18 @@ class SemanticInferencer:
                 pass
 
             # ID string (uuid, códigos únicos)
+            # Requisitos adicionales para evitar falsos positivos:
+            #   - Valores cortos (< 40 chars promedio) — un nombre de anuncio es largo
+            #   - Sin espacios internos predominantes — un ID no suele tenerlos
             n_unicos = serie.nunique()
-            if n_unicos / n_total > 0.95 and n_unicos > 20:
+            longitud_prom  = serie.astype(str).str.len().mean()
+            fraccion_espacios = serie.astype(str).str.contains(" ").mean()
+            if (
+                n_unicos / n_total > 0.95
+                and n_unicos > 20
+                and longitud_prom < 40
+                and fraccion_espacios < 0.15
+            ):
                 tipos[col] = "string_id"
                 continue
 
@@ -377,7 +387,7 @@ class SemanticInferencer:
             "col_email":     {"email"},
             "col_phone":     {"phone", "numeric"},   # telefono puede ser int64
             "col_date":      {"date"},
-            "col_id":        {"numeric_id", "string_id", "text", "categorical"},
+            "col_id":        {"numeric_id", "string_id"},  # text/categorical excluidos — evita falsos positivos sobre columnas de anuncios
             "col_inversion": {"numeric"},
             "col_valor":     {"numeric"},
             "col_name":      {"text", "categorical", "string_id"},  # nombre no es numerico
@@ -399,12 +409,24 @@ class SemanticInferencer:
         # ── Paso 0: matching directo por nombre de columna ────────────────
         # Corre ANTES de embeddings — si el nombre contiene un patrón conocido
         # se asigna directamente con confianza 0.99 y se reserva la columna.
-        mapeo_directo    = {}
+        # Campos que requieren word-boundary matching en lugar de substring puro.
+        # Razón: "id" está contenido en "ad", "adset", "segunda atribucion", etc.
+        # Sin boundary, col_id matchearía columnas de atribución que contienen "id" por accidente.
+        CAMPOS_BOUNDARY = {"col_id"}
+
+        mapeo_directo     = {}
         asignadas_previas = set()
         for campo, patrones in NOMBRE_DIRECTO.items():
             for col in cols_lista:
                 col_lower = col.lower()
-                if any(p in col_lower for p in patrones):
+                if campo in CAMPOS_BOUNDARY:
+                    matched = any(
+                        re.search(rf'(?<![a-z]){re.escape(p)}(?![a-z])', col_lower)
+                        for p in patrones
+                    )
+                else:
+                    matched = any(p in col_lower for p in patrones)
+                if matched:
                     if col not in asignadas_previas and campo not in mapeo_directo:
                         mapeo_directo[campo]  = col
                         asignadas_previas.add(col)
@@ -457,6 +479,42 @@ class SemanticInferencer:
                 mapeo[campo]     = col
                 confianza[campo] = float(score)
                 asignadas.add(col)
+
+        # ── Paso 3: boosting posicional para columnas de atribución ──────────
+        # Cuando hay múltiples columnas semánticamente similares de atribución
+        # (campana / adset / ad) y ninguna ganó por nombre directo, usamos el
+        # orden de aparición en el DataFrame como desempate.
+        # Realidad de exports GHL/Meta: el orden casi siempre es campaña → adset → ad.
+        # Solo aplica si al menos uno de los tres roles sigue sin asignar.
+        ROLES_ATRIBUCION = ["col_campana", "col_adset", "col_ad"]
+        sin_asignar = [r for r in ROLES_ATRIBUCION if mapeo.get(r) is None]
+
+        if sin_asignar:
+            # Columnas no asignadas aún que parecen de atribución:
+            # score razonable contra cualquier rol de atribución y tipo no numérico
+            idx_atribucion = [j for j, c in enumerate(campos_canonicos) if c in ROLES_ATRIBUCION]
+            candidatas_atrib = []
+            for i, col in enumerate(cols_lista):
+                if col in asignadas:
+                    continue
+                if tipos.get(col) in {"numeric", "numeric_id", "email", "phone", "date"}:
+                    continue
+                score_max_atrib = max(scores[i][j] for j in idx_atribucion)
+                if score_max_atrib >= THRESHOLD_COLUMNAS * 0.85:  # umbral relajado para candidatas
+                    candidatas_atrib.append((i, col))
+
+            # Ordenar por posición original en el DataFrame (orden de aparición)
+            candidatas_atrib.sort(key=lambda x: x[0])
+
+            # Asignar en orden: campana → adset → ad
+            for rol in sin_asignar:
+                if not candidatas_atrib:
+                    break
+                i, col = candidatas_atrib.pop(0)
+                mapeo[rol]     = col
+                confianza[rol] = float(max(scores[i][j] for j in idx_atribucion))
+                asignadas.add(col)
+                logger.debug(f"[boosting posicional] '{col}' → '{rol}' por orden de aparición")
 
         return mapeo, confianza
 

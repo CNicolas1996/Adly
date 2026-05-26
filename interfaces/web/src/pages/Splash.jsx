@@ -80,22 +80,20 @@ export default function Splash() {
   const [progress, setProgress] = useState(0)
 
   useEffect(() => {
-    // Simulated loading progress
+    let navigated = false
+
     const interval = setInterval(() => {
       setProgress(p => {
-        if (p >= 100) {
-          clearInterval(interval)
-          return 100
-        }
+        if (p >= 100) { clearInterval(interval); return 100 }
         return p + Math.random() * 30
       })
     }, 200)
 
-    // Check if user is already configured
     getConfig()
       .then(config => {
         setTimeout(() => {
-          // Navigate based on config status
+          if (navigated) return
+          navigated = true
           if (config.data_source === 'mock') {
             navigate('/onboarding')
           } else {
@@ -104,10 +102,17 @@ export default function Splash() {
         }, 800)
       })
       .catch(() => {
-        setTimeout(() => navigate('/onboarding'), 1200)
+        setTimeout(() => {
+          if (navigated) return
+          navigated = true
+          navigate('/home')
+        }, 1200)
       })
 
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      navigated = true
+    }
   }, [navigate])
 
   return (

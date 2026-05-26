@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AdlyProvider } from '@/context/AdlyContext'
@@ -147,9 +147,9 @@ function DesktopSidebar({ onClose }) {
         </div>
         <button
           onClick={onClose}
-          style={{ background: 'none', border: 'none', color: '#2a2a2a', cursor: 'pointer', padding: 4, borderRadius: 4, display: 'flex', transition: 'color 0.15s' }}
+          style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', padding: 4, borderRadius: 4, display: 'flex', transition: 'color 0.15s' }}
           onMouseEnter={e => e.currentTarget.style.color = '#e8742a'}
-          onMouseLeave={e => e.currentTarget.style.color = '#2a2a2a'}
+          onMouseLeave={e => e.currentTarget.style.color = '#555'}
           title="Cerrar"
         >
           <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -233,7 +233,7 @@ function SidebarList({ onItemClick }) {
   const [analyses, setAnalyses] = useState([])
   const [loading, setLoading] = useState(true)
 
-  useState(() => {
+  useEffect(() => {
     getAnalyses().then(setAnalyses).catch(console.error).finally(() => setLoading(false))
   }, [])
 
@@ -267,7 +267,7 @@ function SidebarList({ onItemClick }) {
               <div style={{ fontSize: 13, fontWeight: 500, color: active ? '#eee' : '#bbb', fontFamily: 'Inter, sans-serif', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {analysis.name}
               </div>
-              <div style={{ fontSize: 11, color: '#2a2a2a', fontFamily: 'JetBrains Mono, monospace', marginTop: 3, display: 'flex', gap: 8 }}>
+              <div style={{ fontSize: 11, color: '#6a5a48', fontFamily: 'JetBrains Mono, monospace', marginTop: 3, display: 'flex', gap: 8 }}>
                 <span>{formatDate(analysis.created_at)}</span>
                 {conf != null && (
                   <span style={{ color: conf >= 0.7 ? '#4ade80' : conf >= 0.4 ? '#e8742a' : '#f87171' }}>

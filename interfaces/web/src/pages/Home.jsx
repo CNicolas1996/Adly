@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, useInView } from 'framer-motion'
 import { getAnalyses } from '@/api/client'
 import Spinner from '@/components/ui/Spinner'
+import HeroBackground from '@/components/adly/HeroBackground'
 
 /* ─── Cat paw SVG (inline, CC0) ──────────────────────── */
 function CatPaw({ size = 32, color = '#e8742a', opacity = 1, rotate = 0, style = {} }) {
@@ -127,8 +128,8 @@ export default function Home() {
         </RevealSection>
 
         <div style={{ borderTop: '1px solid #0f0f0f', padding: '24px 40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 11, color: '#222', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.08em' }}>ADLY · DATA INTEGRITY LAYER</span>
-          <span style={{ fontSize: 11, color: '#222', fontFamily: 'JetBrains Mono, monospace' }}>Groq · Llama 3.3 70b</span>
+          <span style={{ fontSize: 11, color: '#6a5a48', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.08em' }}>ADLY · DATA INTEGRITY LAYER</span>
+          <span style={{ fontSize: 11, color: '#6a5a48', fontFamily: 'JetBrains Mono, monospace' }}>Groq · Llama 3.3 70b</span>
         </div>
       </div>
     </div>
@@ -142,7 +143,8 @@ function Hero({ query, setQuery, onSubmit }) {
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 24px', overflow: 'hidden' }}>
-      <HaloBg />
+      
+      <HeroBackground />
       <CatPawTrail />
 
       <div style={{ position: 'relative', zIndex: 2, textAlign: 'center', maxWidth: 680, width: '100%' }}>
@@ -180,7 +182,7 @@ function Hero({ query, setQuery, onSubmit }) {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          style={{ fontSize: 'clamp(13px, 2vw, 17px)', color: '#444', fontFamily: 'Inter, sans-serif', fontWeight: 400, marginBottom: 52, letterSpacing: '-0.01em' }}
+          style={{ fontSize: 'clamp(13px, 2vw, 17px)', color: '#8a7a6a', fontFamily: 'Inter, sans-serif', fontWeight: 400, marginBottom: 52, letterSpacing: '-0.01em' }}
         >
           Tu analista de datos de marketing
         </motion.p>
@@ -239,7 +241,7 @@ function Hero({ query, setQuery, onSubmit }) {
             </button>
           </form>
 
-          <p style={{ marginTop: 16, fontSize: 11, color: '#2a2a2a', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.05em' }}>
+          <p style={{ marginTop: 16, fontSize: 11, color: '#6a5a48', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.05em' }}>
             escribe una pregunta · o usa /comandos abajo
           </p>
         </motion.div>
@@ -253,53 +255,12 @@ function Hero({ query, setQuery, onSubmit }) {
         style={{ position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)', zIndex: 2 }}
       >
         <motion.div animate={{ y: [0, 7, 0] }} transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}>
-          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="#2a2a2a" strokeWidth={1.5}>
+          <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="#6a5a48" strokeWidth={1.5}>
             <path d="M12 5v14M5 12l7 7 7-7" />
           </svg>
         </motion.div>
       </motion.div>
     </div>
-  )
-}
-
-/* ─── Halo background ────────────────────────────────── */
-function HaloBg() {
-  return (
-    <>
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'linear-gradient(108deg, transparent 30%, rgba(232,116,42,0.03) 50%, transparent 70%)',
-        backgroundSize: '200% 200%',
-        animation: 'shimmer 12s ease-in-out infinite',
-        pointerEvents: 'none', zIndex: 1,
-      }} />
-      <motion.div
-        animate={{ scale: [1, 1.12, 1], opacity: [0.8, 1, 0.8] }}
-        transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}
-        style={{
-          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-          width: '85vw', height: '85vw', maxWidth: 960, maxHeight: 960,
-          background: 'radial-gradient(ellipse at center, rgba(232,116,42,0.18) 0%, rgba(232,116,42,0.06) 38%, transparent 65%)',
-          borderRadius: '50%', pointerEvents: 'none', zIndex: 0,
-        }}
-      />
-      <motion.div
-        animate={{ scale: [1.08, 1, 1.08], opacity: [0.45, 0.8, 0.45] }}
-        transition={{ duration: 13, repeat: Infinity, ease: 'easeInOut' }}
-        style={{
-          position: 'absolute', top: '44%', left: '50%', transform: 'translate(-50%, -50%)',
-          width: '50vw', height: '50vw', maxWidth: 580, maxHeight: 580,
-          background: 'radial-gradient(ellipse at center, rgba(232,116,42,0.1) 0%, transparent 65%)',
-          borderRadius: '50%', pointerEvents: 'none', zIndex: 0,
-        }}
-      />
-      {/* Vignette perimetral */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: 'radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.75) 100%)',
-        pointerEvents: 'none', zIndex: 1,
-      }} />
-    </>
   )
 }
 
@@ -351,10 +312,10 @@ function CommandRow({ cmd, desc, onClick }) {
         transition: 'all 0.15s ease', width: '100%',
       }}
     >
-      <span style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: hovered ? '#e8742a' : '#383838', minWidth: 130, transition: 'color 0.15s ease', fontWeight: 500 }}>
+      <span style={{ fontSize: 12, fontFamily: 'JetBrains Mono, monospace', color: hovered ? '#e8742a' : '#8a7060', minWidth: 130, transition: 'color 0.15s ease', fontWeight: 500 }}>
         {cmd}
       </span>
-      <span style={{ fontSize: 12, fontFamily: 'Inter, sans-serif', color: '#2c2c2c' }}>{desc}</span>
+      <span style={{ fontSize: 12, fontFamily: 'Inter, sans-serif', color: '#7a6a58' }}>{desc}</span>
     </button>
   )
 }
@@ -382,7 +343,7 @@ function AnalysisRow({ analysis, onClick }) {
         <div style={{ fontSize: 13, fontWeight: 500, color: hovered ? '#ffffff' : '#aaaaaa', fontFamily: 'Inter, sans-serif', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', transition: 'color 0.15s ease', marginBottom: 4 }}>
           {analysis.name}
         </div>
-        <div style={{ fontSize: 11, color: '#2a2a2a', fontFamily: 'JetBrains Mono, monospace', display: 'flex', gap: 10 }}>
+        <div style={{ fontSize: 11, color: '#6a5a48', fontFamily: 'JetBrains Mono, monospace', display: 'flex', gap: 10 }}>
           <span>{analysis.dataset}</span><span>·</span><span>{formatDate(analysis.created_at)}</span>
         </div>
       </div>
@@ -430,7 +391,7 @@ function DatasetStatus({ analyses, loading }) {
 function StatusCell({ label, value, accent }) {
   return (
     <div style={{ padding: '22px 24px', borderRight: '1px solid #111' }}>
-      <div style={{ fontSize: 10, fontFamily: 'JetBrains Mono, monospace', color: '#282828', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>{label}</div>
+      <div style={{ fontSize: 10, fontFamily: 'JetBrains Mono, monospace', color: '#6a5a48', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>{label}</div>
       <div style={{ fontSize: 30, fontWeight: 600, color: accent || '#eeeeee', fontFamily: 'Inter, sans-serif', letterSpacing: '-0.03em', lineHeight: 1 }}>{value}</div>
     </div>
   )
@@ -443,7 +404,7 @@ function EmptyState({ onNew }) {
       <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center', opacity: 0.15 }}>
         <CatPaw size={36} color="#e8742a" />
       </div>
-      <p style={{ fontSize: 13, color: '#2a2a2a', fontFamily: 'Inter, sans-serif', marginBottom: 16 }}>
+      <p style={{ fontSize: 13, color: '#7a6a58', fontFamily: 'Inter, sans-serif', marginBottom: 16 }}>
         No hay análisis — escribe una pregunta arriba para empezar
       </p>
       <button
